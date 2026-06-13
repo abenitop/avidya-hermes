@@ -3529,6 +3529,7 @@ class BasePlatformAdapter(ABC):
 
         try:
             response = await self._message_handler(event)
+            _is_system = isinstance(response, EphemeralReply)
             _text, _eph_ttl = self._unwrap_ephemeral(response)
             # Send the response BEFORE cancelling the old task so the send
             # cannot be affected by task-cancellation side effects (race
@@ -3547,7 +3548,7 @@ class BasePlatformAdapter(ABC):
                     chat_id=event.source.chat_id,
                     content=_text,
                     reply_to=_reply_anchor_for_event(event),
-                    metadata=thread_meta,
+                    metadata={**(thread_meta or {}), "_hermes_suppress_in_group": True} if _is_system else thread_meta,
                 )
                 if _eph_ttl > 0 and _r.success and _r.message_id:
                     self._schedule_ephemeral_delete(
@@ -3647,13 +3648,14 @@ class BasePlatformAdapter(ABC):
                 try:
                     _thread_meta = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                     response = await self._message_handler(event)
+                    _is_system = isinstance(response, EphemeralReply)
                     _text, _eph_ttl = self._unwrap_ephemeral(response)
                     if _text:
                         _r = await self._send_with_retry(
                             chat_id=event.source.chat_id,
                             content=_text,
                             reply_to=_reply_anchor_for_event(event),
-                            metadata=_thread_meta,
+                            metadata={**(_thread_meta or {}), "_hermes_suppress_in_group": True} if _is_system else _thread_meta,
                         )
                         if _eph_ttl > 0 and _r.success and _r.message_id:
                             self._schedule_ephemeral_delete(
@@ -3697,13 +3699,14 @@ class BasePlatformAdapter(ABC):
                             event.source, _reply_anchor_for_event(event)
                         )
                         response = await self._message_handler(event)
+                        _is_system = isinstance(response, EphemeralReply)
                         _text, _eph_ttl = self._unwrap_ephemeral(response)
                         if _text:
                             _r = await self._send_with_retry(
                                 chat_id=event.source.chat_id,
                                 content=_text,
                                 reply_to=_reply_anchor_for_event(event),
-                                metadata=_thread_meta,
+                                metadata={**(_thread_meta or {}), "_hermes_suppress_in_group": True} if _is_system else _thread_meta,
                             )
                             if _eph_ttl > 0 and _r.success and _r.message_id:
                                 self._schedule_ephemeral_delete(
@@ -3979,6 +3982,8 @@ class BasePlatformAdapter(ABC):
                         _thread_metadata["notify"] = True
                     else:
                         _thread_metadata = {"notify": True}
+                    if is_ephemeral_response:
+                        _thread_metadata["_hermes_suppress_in_group"] = True
                     result = await self._send_with_retry(
                         chat_id=event.source.chat_id,
                         content=text_content,

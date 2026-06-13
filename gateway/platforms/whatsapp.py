@@ -16,6 +16,7 @@ with different backends via a bridge pattern.
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -32,6 +33,39 @@ from typing import Dict, Optional, Any
 from hermes_constants import get_hermes_dir
 
 logger = logging.getLogger(__name__)
+
+_FRAMEWORK_LEAK_PATTERNS = [
+    re.compile(r'(?m)^[⚠️✅↻⏳]'),
+    re.compile(r'```|(?<![`])`(?![`])'),
+    re.compile(r'(?:^|\s)(?:/opt/|/home/|/tmp/)\S'),
+    re.compile(r'(?:^|\s)--[a-zA-Z]'),
+    re.compile(r'</?(?:function|tool)[_\s>]'),
+    re.compile(r'(?i)reply\s+/approve|/deny|approve\s+session'),
+    re.compile(r'(?i)empty response after tool calls'),
+    re.compile(r'(?i)working\s+[—\-]\s*\d+'),
+]
+
+_FILTER_LOG_PATH = Path.home() / ".hermes" / "logs" / "filtered_output.log"
+
+
+def _whatsapp_framework_leak(content: str) -> str:
+    """Return the matching pattern string if content contains a framework leak, else empty string."""
+    for pattern in _FRAMEWORK_LEAK_PATTERNS:
+        if pattern.search(content):
+            return pattern.pattern
+    return ""
+
+
+def _log_filtered_message(chat_id: str, content: str, reason: str) -> None:
+    """Append a blocked message to the filter log with timestamp and chat_id."""
+    try:
+        _FILTER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        entry = f"[{ts}] chat={chat_id} reason={reason!r}\n{content}\n{'—' * 60}\n"
+        with _FILTER_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(entry)
+    except Exception as exc:
+        logger.warning("filtered_output.log write failed: %s", exc)
 
 
 def _kill_port_process(port: int) -> None:
@@ -264,6 +298,10 @@ class WhatsAppAdapter(BasePlatformAdapter):
         self._allow_from = self._coerce_allow_list(config.extra.get("allow_from") or config.extra.get("allowFrom"))
         self._group_policy = str(config.extra.get("group_policy") or os.getenv("WHATSAPP_GROUP_POLICY", "open")).strip().lower()
         self._group_allow_from = self._coerce_allow_list(config.extra.get("group_allow_from") or config.extra.get("groupAllowFrom"))
+        self._group_suppress_system_messages = self._coerce_allow_list(
+            config.extra.get("group_suppress_system_messages")
+            or config.extra.get("groupSuppressSystemMessages")
+        )
         self._mention_patterns = self._compile_mention_patterns()
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._bridge_log_fh = None
@@ -921,6 +959,18 @@ class WhatsAppAdapter(BasePlatformAdapter):
             return SendResult(success=False, error=bridge_exit)
 
         if not content or not content.strip():
+            return SendResult(success=True, message_id=None)
+
+        if (
+            chat_id in self._group_suppress_system_messages
+            and isinstance(metadata, dict)
+            and metadata.get("_hermes_suppress_in_group")
+        ):
+            return SendResult(success=True, message_id=None)
+
+        blocked_reason = _whatsapp_framework_leak(content)
+        if blocked_reason:
+            _log_filtered_message(chat_id, content, blocked_reason)
             return SendResult(success=True, message_id=None)
 
         try:

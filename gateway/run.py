@@ -16913,6 +16913,7 @@ class GatewayRunner:
             if _progress_thread_id == source.thread_id
             else {"thread_id": _progress_thread_id}
         ) if _progress_thread_id else None
+        _progress_metadata = {**(_progress_metadata or {}), "_hermes_suppress_in_group": True}
         _progress_reply_to = (
             event_message_id
             if source.platform in (Platform.FEISHU, Platform.MATTERMOST) and source.thread_id and event_message_id
@@ -17827,7 +17828,7 @@ class GatewayRunner:
                         _status_adapter.send(
                             _status_chat_id,
                             msg,
-                            metadata=_status_thread_metadata,
+                            metadata={**(_status_thread_metadata or {}), "_hermes_suppress_in_group": True},
                         ),
                         _loop_for_step,
                         logger=logger,
