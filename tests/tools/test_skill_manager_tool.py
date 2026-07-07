@@ -563,8 +563,16 @@ class TestSkillManageDispatcher:
         rec = usage.get("test-skill") or {}
         assert rec.get("created_by") in {None, "", False}
 
-    def test_create_from_background_review_marks_agent_created(self, tmp_path):
-        """Background-review fork creates ARE marked as agent-created."""
+    def test_create_from_background_review_is_blocked(self, tmp_path):
+        """Background-review-fork creates are refused entirely.
+
+        Prior to the 2026-07-07 incident fix, review-fork creates were
+        allowed and marked agent-created for later curator consolidation.
+        That capability was removed after an unattended write reached
+        production skill files with no human review — see
+        `_background_review_preflight`'s `action == "create"` branch, which
+        now refuses every create from this origin unconditionally.
+        """
         from tools.skill_provenance import set_current_write_origin, BACKGROUND_REVIEW
         token = set_current_write_origin(BACKGROUND_REVIEW)
         try:
@@ -572,14 +580,57 @@ class TestSkillManageDispatcher:
                 raw = skill_manage(
                     action="create", name="review-sediment", content=VALID_SKILL_CONTENT
                 )
-                from tools.skill_usage import load_usage
-                usage = load_usage()
         finally:
             from tools.skill_provenance import reset_current_write_origin
             reset_current_write_origin(token)
         result = json.loads(raw)
-        assert result["success"] is True
-        assert usage["review-sediment"]["created_by"] == "agent"
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()
+        # No skill directory was created at all — this is a hard refusal,
+        # not a partial/rolled-back write.
+        assert not (tmp_path / "review-sediment").exists()
+
+    def test_curator_create_umbrella_skill_still_works(self, tmp_path, monkeypatch):
+        """2026-07-08 narrowing: curator's create exemption.
+
+        Counterpart to test_create_from_background_review_is_blocked — the
+        scheduled curator legitimately creates new umbrella SKILL.md files
+        during consolidation (its own prompt: "skill_manage action=create —
+        create a new umbrella SKILL.md"). This was never part of the
+        2026-07-07 incident (a live-conversation-only write), so
+        _background_review_preflight's create branch exempts platform="curator"
+        and this must keep succeeding.
+        """
+        with _curator_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            raw = skill_manage(
+                action="create", name="new-umbrella", content=_skill_content("new-umbrella")
+            )
+        result = json.loads(raw)
+        assert result["success"] is True, result
+        assert (skills_root / "new-umbrella" / "SKILL.md").exists()
+
+    def test_live_fork_refused_for_plain_unremarkable_skill(self, tmp_path, monkeypatch):
+        """Direct confirmation the live per-turn fork's blanket block still
+        covers the ordinary case — not just the pinned/external/bundled edge
+        cases exercised elsewhere. A plain, unpinned, non-external, non-owned
+        skill is refused for every mutating action."""
+        with _live_fork_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            _create_skill("ordinary", _skill_content("ordinary"))
+
+            for action, kwargs in [
+                ("patch", dict(old_string="Step 1: Do the thing.", new_string="Changed.")),
+                ("edit", dict(content=_skill_content("ordinary").replace(
+                    "Step 1: Do the thing.", "Rewritten."))),
+                ("write_file", dict(file_path="references/notes.md", file_content="x")),
+                ("delete", dict(absorbed_into="")),
+            ]:
+                raw = skill_manage(action=action, name="ordinary", **kwargs)
+                result = json.loads(raw)
+                assert result["success"] is False, f"{action} unexpectedly succeeded: {result}"
+                assert "disabled" in result["error"].lower(), f"{action}: {result}"
+
+            # Nothing about the skill changed as a side effect of any attempt.
+            assert (skills_root / "ordinary" / "SKILL.md").read_text() == _skill_content("ordinary")
 
     def test_delete_via_dispatcher_threads_absorbed_into(self, tmp_path):
         # Dispatcher must plumb absorbed_into through to _delete_skill so the
@@ -601,32 +652,47 @@ class TestSkillManageDispatcher:
         assert "does not exist" in result["error"]
 
     def test_background_review_delete_refuses_bundled_even_with_absorbed_into(self, tmp_path):
+        """A bundled skill (or any skill) is refused for background-review
+        delete even with a valid absorbed_into target.
+
+        The `is_bundled` patch below is now vestigial: the write-block is
+        unconditional post-incident-fix, so it would refuse this delete
+        regardless of bundled status. Kept to document that fact and because
+        an unrelated skill-type check firing first would still need to not
+        interfere with the blanket refusal.
+
+        Fixture creation is deliberately done under the *foreground* origin
+        (before BACKGROUND_REVIEW is set) — creating under BACKGROUND_REVIEW
+        is itself refused now (see test_create_from_background_review_is_blocked),
+        so doing it there would prevent the fixture from ever existing.
+        """
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
             set_current_write_origin,
         )
 
-        token = set_current_write_origin(BACKGROUND_REVIEW)
-        try:
-            with _skill_dir(tmp_path), \
-                 patch("tools.skill_usage.is_protected_builtin", return_value=False), \
-                 patch("tools.skill_usage.is_hub_installed", return_value=False), \
-                 patch("tools.skill_usage.is_bundled",
-                       side_effect=lambda skill_name: skill_name == "bundled"):
-                skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
-                skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
+        with _skill_dir(tmp_path), \
+             patch("tools.skill_usage.is_protected_builtin", return_value=False), \
+             patch("tools.skill_usage.is_hub_installed", return_value=False), \
+             patch("tools.skill_usage.is_bundled",
+                   side_effect=lambda skill_name: skill_name == "bundled"):
+            skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
+            skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
+
+            token = set_current_write_origin(BACKGROUND_REVIEW)
+            try:
                 raw = skill_manage(
                     action="delete",
                     name="bundled",
                     absorbed_into="umbrella",
                 )
-        finally:
-            reset_current_write_origin(token)
+            finally:
+                reset_current_write_origin(token)
 
         result = json.loads(raw)
         assert result["success"] is False
-        assert "bundled" in result["error"].lower()
+        assert "disabled" in result["error"].lower()
         assert (tmp_path / "bundled" / "SKILL.md").exists()
 
 
@@ -908,15 +974,22 @@ class TestExternalSkillMutations:
 
         result = json.loads(raw)
         assert result["success"] is False
-        assert "external" in result["error"].lower()
+        # Post-incident-fix, the guard no longer distinguishes external skills
+        # from any other kind — it refuses every background-review write
+        # unconditionally, so the message is the generic disabled-pending-review
+        # one rather than an external-dirs-specific reason.
+        assert "disabled" in result["error"].lower()
+        assert "ext-skill" in result["error"]
         assert "OLD_MARKER" in (skill_dir / "SKILL.md").read_text()
         assert "NEW_MARKER" not in (skill_dir / "SKILL.md").read_text()
 
     def test_background_review_refuses_to_patch_pinned_skill(self, tmp_path):
-        """#25839: the autonomous review fork respects pin like the curator
-        does — a pinned skill is off-limits to background maintenance, even
-        for patch/edit (which a foreground user-directed call is allowed to
-        perform). Without a user in the loop there is no one to consent."""
+        """#25839 (superseded by the 2026-07-07 incident fix): the autonomous
+        review fork used to specifically respect pin status. Now every
+        background-review write is refused unconditionally regardless of pin
+        state, so a pinned skill is refused for the same generic reason as
+        any other — this test still confirms pinned skills are covered, just
+        no longer via pin-specific reasoning."""
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
@@ -942,11 +1015,15 @@ class TestExternalSkillMutations:
 
         result = json.loads(raw)
         assert result["success"] is False
-        assert "pinned" in result["error"].lower()
+        assert "disabled" in result["error"].lower()
+        assert "my-skill" in result["error"]
 
-    def test_background_review_unpinned_skill_not_blocked_by_pin_guard(self, tmp_path):
-        """The pin guard must not over-block: an unpinned agent-owned skill is
-        still writable by the review fork."""
+    def test_background_review_write_blocked_even_when_unpinned(self, tmp_path):
+        """Superseded by the 2026-07-07 incident fix: this used to prove the
+        pin guard doesn't over-block an unpinned, already-read skill (write
+        allowed). That capability — background-review being able to write to
+        *any* skill, pinned or not — was deliberately removed. An unpinned,
+        already-read skill is now refused exactly like every other case."""
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
@@ -974,7 +1051,9 @@ class TestExternalSkillMutations:
                 reset_current_write_origin(token)
 
         result = json.loads(raw)
-        assert result["success"] is True
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()
+        assert "Do the new thing." not in (tmp_path / "my-skill" / "SKILL.md").read_text()
 
 
 
@@ -1164,12 +1243,50 @@ class TestDeleteSkillRmtreeGuard:
 
 @contextmanager
 def _curator_pass(tmp_path, *, monkeypatch):
-    """Run the body as the curator/background-review fork.
+    """Run the body as the scheduled curator/background-review fork.
 
     Points HERMES_HOME at ``tmp_path/.hermes`` so skill_usage's archive path
     (``get_hermes_home()``) resolves into the same tree the skill manager
-    searches, and flips ``is_background_review()`` → True so the consolidation
-    guard fires.
+    searches, flips ``is_background_review()`` → True so the consolidation
+    guard fires, and tags the write-platform ContextVar as "curator" —
+    matching agent/curator.py's real AIAgent(platform="curator", ...) — so
+    the 2026-07-07 incident's unconditional write-block (scoped to the live
+    per-turn fork only, see skill_manager_tool.py's
+    _background_review_write_guard) does not also swallow the curator's own,
+    separately-guarded consolidation deletes.
+    """
+    from tools.skill_provenance import (
+        CURATOR_PLATFORM,
+        reset_current_write_platform,
+        set_current_write_platform,
+    )
+
+    hermes_home = tmp_path / ".hermes"
+    skills_root = hermes_home / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    platform_token = set_current_write_platform(CURATOR_PLATFORM)
+    try:
+        with patch("tools.skill_manager_tool.SKILLS_DIR", skills_root), \
+             patch("tools.skills_tool.SKILLS_DIR", skills_root), \
+             patch("agent.skill_utils.get_all_skills_dirs", return_value=[skills_root]), \
+             patch("tools.skill_provenance.is_background_review", return_value=True):
+            yield skills_root
+    finally:
+        reset_current_write_platform(platform_token)
+
+
+@contextmanager
+def _live_fork_pass(tmp_path, *, monkeypatch):
+    """Run the body as the live per-turn background_review fork — the
+    conversation-triggered fork implicated in the 2026-07-07 incident, as
+    opposed to _curator_pass's scheduled curator job.
+
+    Same is_background_review()=True origin and directory setup as
+    _curator_pass, but deliberately does NOT tag the write-platform
+    ContextVar as "curator" (it's left at its default), so
+    _background_review_write_guard's unconditional block applies exactly as
+    it does for a real live conversation.
     """
     hermes_home = tmp_path / ".hermes"
     skills_root = hermes_home / "skills"
@@ -1287,6 +1404,17 @@ class TestCuratorConsolidationDeleteGuard:
         assert rec.get("state") == skill_usage.STATE_ARCHIVED
 
     def test_background_review_patch_requires_skill_view_first(self, tmp_path, monkeypatch):
+        """Curator's original read-before-write contract, still alive.
+
+        This is the pre-2026-07-07 test, retargeted at _curator_pass now that
+        curator is exempted from the incident's unconditional block (see
+        _background_review_write_guard): since curator falls through the
+        pin/external/owned checks to reach
+        _background_review_read_before_write_guard exactly as it always did,
+        a patch is refused until skill_view() has loaded the target in this
+        review turn, then allowed. Confirms the mechanism survived the
+        2026-07-08 narrowing intact for the actor it was designed to govern.
+        """
         from tools.skills_tool import skill_view
         from tools.skill_manager_tool import _reset_background_review_read_marks
 
@@ -1317,6 +1445,7 @@ class TestCuratorConsolidationDeleteGuard:
         _reset_background_review_read_marks()
 
     def test_background_review_support_file_overwrite_requires_that_file_read(self, tmp_path, monkeypatch):
+        """write_file counterpart to test_background_review_patch_requires_skill_view_first."""
         from tools.skills_tool import skill_view
         from tools.skill_manager_tool import _reset_background_review_read_marks
 
@@ -1346,5 +1475,93 @@ class TestCuratorConsolidationDeleteGuard:
                 file_content="new workflow\n",
             ))
             assert allowed["success"] is True, allowed
+
+        _reset_background_review_read_marks()
+
+    def test_background_review_patch_refused_even_after_reading_skill(self, tmp_path, monkeypatch):
+        """Live per-turn fork counterpart: reading first does NOT unlock a write.
+
+        Unlike curator (see test_background_review_patch_requires_skill_view_first,
+        which uses _curator_pass), the live fork never reaches
+        _background_review_read_before_write_guard at all — its
+        `_background_review_write_guard` branch returns the unconditional
+        refusal immediately, before the read-before-write guard is ever
+        evaluated. So for the live fork specifically,
+        `_background_review_read_before_write_guard`,
+        `mark_background_review_skill_read`, and `_read_before_write_required`
+        are dead code on this call path. Not removed here (out of scope for
+        this fix), just documented — and distinguished from curator, for
+        which the same mechanism is very much alive (see above).
+        """
+        from tools.skills_tool import skill_view
+        from tools.skill_manager_tool import _reset_background_review_read_marks
+
+        _reset_background_review_read_marks()
+        with _live_fork_pass(tmp_path, monkeypatch=monkeypatch):
+            _create_skill("reviewed", _skill_content("reviewed"))
+
+            blocked = json.loads(skill_manage(
+                action="patch",
+                name="reviewed",
+                old_string="Step 1: Do the thing.",
+                new_string="Step 1: Do the thing safely.",
+            ))
+            assert blocked["success"] is False
+            assert "disabled" in blocked["error"].lower()
+
+            viewed = json.loads(skill_view("reviewed"))
+            assert viewed["success"] is True
+
+            still_blocked = json.loads(skill_manage(
+                action="patch",
+                name="reviewed",
+                old_string="Step 1: Do the thing.",
+                new_string="Step 1: Do the thing safely.",
+            ))
+            assert still_blocked["success"] is False, (
+                "reading the skill first must not unlock a write — the "
+                "live fork's blanket block does not depend on "
+                "read-before-write state"
+            )
+            assert "disabled" in still_blocked["error"].lower()
+
+        _reset_background_review_read_marks()
+
+    def test_background_review_write_file_refused_even_after_reading_file(self, tmp_path, monkeypatch):
+        """write_file counterpart to test_background_review_patch_refused_even_after_reading_skill
+        — see that test's docstring for why this (the live fork) differs from
+        curator's still-live read-before-write contract."""
+        from tools.skills_tool import skill_view
+        from tools.skill_manager_tool import _reset_background_review_read_marks
+
+        _reset_background_review_read_marks()
+        with _live_fork_pass(tmp_path, monkeypatch=monkeypatch):
+            _create_skill("reviewed", _skill_content("reviewed"))
+            ref = tmp_path / ".hermes" / "skills" / "reviewed" / "references"
+            ref.mkdir()
+            (ref / "workflow.md").write_text("old workflow\n", encoding="utf-8")
+
+            assert json.loads(skill_view("reviewed"))["success"] is True
+            blocked = json.loads(skill_manage(
+                action="write_file",
+                name="reviewed",
+                file_path="references/workflow.md",
+                file_content="new workflow\n",
+            ))
+            assert blocked["success"] is False
+            assert "disabled" in blocked["error"].lower()
+
+            assert json.loads(skill_view("reviewed", "references/workflow.md"))["success"] is True
+            still_blocked = json.loads(skill_manage(
+                action="write_file",
+                name="reviewed",
+                file_path="references/workflow.md",
+                file_content="new workflow\n",
+            ))
+            assert still_blocked["success"] is False, (
+                "reading the file first must not unlock a write"
+            )
+            assert "disabled" in still_blocked["error"].lower()
+            assert (ref / "workflow.md").read_text() == "old workflow\n"
 
         _reset_background_review_read_marks()

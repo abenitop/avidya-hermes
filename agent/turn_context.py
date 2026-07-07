@@ -132,6 +132,7 @@ def build_turn_context(
     summarize_user_message_for_log,
     set_session_context,
     set_current_write_origin,
+    set_current_write_platform,
     ra,
 ) -> TurnContext:
     """Run the once-per-turn setup and return the loop's input context.
@@ -169,6 +170,10 @@ def build_turn_context(
 
     # Bind the skill write-origin ContextVar for this thread.
     set_current_write_origin(getattr(agent, "_memory_write_origin", "assistant_tool"))
+    # Bind the skill write-platform ContextVar for this thread (distinguishes
+    # the scheduled curator job from the live per-turn background_review fork
+    # — see tools/skill_provenance.py's CURATOR_PLATFORM docstring).
+    set_current_write_platform(getattr(agent, "platform", "") or "")
 
     # Restore the primary runtime if the previous turn activated fallback.
     agent._restore_primary_runtime()

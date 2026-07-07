@@ -283,12 +283,32 @@ def _background_review_write_guard(
     skill_dir: Path,
     action: str,
 ) -> Optional[Dict[str, Any]]:
-    """Refuse autonomous curator writes to externally owned skills.
+    """Refuse autonomous writes to skills from the live per-turn incident
+    fork; let the scheduled curator job proceed to the pin/external/owned
+    checks below and, for deletes, on to _curator_consolidation_delete_guard.
 
-    Foreground agents may still perform user-directed edits to external,
-    bundled, or hub-installed skills. The background review fork is different:
-    it is autonomous lifecycle maintenance, so its write surface is restricted
-    to local curator-owned sediment.
+    Hard-disabled 2026-07-07 for the live per-turn background_review fork
+    (incident: unattended write to dharma-library-pdf-fallback/SKILL.md from
+    a live conversation, no human review) — that fork gets no independent
+    verification, so it is refused unconditionally, for every action, on
+    every skill, regardless of the checks below.
+
+    Narrowed 2026-07-08: the weekly scheduled curator job
+    (agent/curator.py) shares the same is_background_review() origin tag —
+    it sets AIAgent(platform="curator", ...) deliberately so it's covered by
+    the pin/external/owned checks below — but it is a different risk
+    profile: cron-triggered rather than conversation-triggered, and its own
+    deletes are already fail-closed via _curator_consolidation_delete_guard
+    (incident #29912). Blocking it unconditionally too disabled a working,
+    incident-informed safety mechanism (verified-consolidation archiving) for
+    no added safety benefit, so it is exempted from the unconditional block
+    via the platform="curator" tag and instead falls through to the same
+    pin/external/owned checks that predated the 2026-07-07 incident.
+
+    Foreground (user-directed) writes are unaffected — this guard only fires
+    when ``is_background_review()`` is true. Read actions (skill_view,
+    skills_list) are not routed through this guard, so curator/review read
+    behavior is unaffected.
     """
     try:
         from tools.skill_provenance import is_background_review
@@ -297,6 +317,31 @@ def _background_review_write_guard(
     except Exception:
         return None
 
+    try:
+        from tools.skill_provenance import is_curator_platform
+        is_curator = is_curator_platform()
+    except Exception:
+        # Fail closed: if platform can't be determined, treat this as the
+        # live per-turn fork rather than silently granting curator's wider
+        # write surface.
+        is_curator = False
+
+    if not is_curator:
+        # Live per-turn background_review fork — refused unconditionally,
+        # for every action, on every skill. Unchanged from the 2026-07-07
+        # incident fix.
+        return {
+            "success": False,
+            "error": (
+                f"Refusing background curator {action} for skill '{name}': "
+                "autonomous skill writes are disabled pending review of the "
+                "background-review/curator write mechanism."
+            ),
+        }
+
+    # Scheduled curator job — pre-incident checks apply, unchanged from
+    # before the 2026-07-07 fix.
+    #
     # Pin must be respected by autonomous maintenance. The curator already
     # skips pinned skills from every auto-transition; the background review
     # fork is the same kind of autonomous, no-user-present actor, so it must
@@ -360,6 +405,7 @@ def _background_review_write_guard(
             }
     except Exception:
         logger.debug("owned skill guard lookup failed for %s", name, exc_info=True)
+
     return None
 
 
@@ -394,6 +440,32 @@ def _background_review_read_before_write_guard(
 
 
 def _background_review_preflight(action: str, name: str) -> Optional[Dict[str, Any]]:
+    if action == "create":
+        # Hard-disabled 2026-07-07 for the live per-turn fork alongside the
+        # write guard below: creating a brand-new SKILL.md is still an
+        # unattended write to the agent's own instruction set, so it must not
+        # bypass the guard just because _find_skill(name) finds nothing yet
+        # to check ownership of.
+        #
+        # Narrowed 2026-07-08: the scheduled curator legitimately creates new
+        # umbrella SKILL.md files as part of consolidation ("skill_manage
+        # action=create — create a new umbrella SKILL.md" is part of its own
+        # prompt) — this was never part of the incident, so it is exempted
+        # via the same platform="curator" tag as the write guard above.
+        try:
+            from tools.skill_provenance import is_background_review, is_curator_platform
+            if is_background_review() and not is_curator_platform():
+                return {
+                    "success": False,
+                    "error": (
+                        f"Refusing background curator create for skill '{name}': "
+                        "autonomous skill writes are disabled pending review of "
+                        "the background-review/curator write mechanism."
+                    ),
+                }
+        except Exception:
+            pass
+        return None
     if action not in {"edit", "patch", "delete", "write_file", "remove_file"}:
         return None
     existing = _find_skill(name)
