@@ -1,7 +1,8 @@
-# Hermes-Agent Manifesto v1.0
+# Hermes-Agent Manifesto v1.1
 
-*The runtime counterpart to rag-pipeline's Gated Pipeline Manifesto (v2.0,
-17 principles). That document governs a batch document-ingest pipeline;
+*The runtime counterpart to rag-pipeline's Gated Pipeline Manifesto
+(v2.4, 20 principles as of 2026-08-10). That document governs a batch
+document-ingest pipeline;
 this one governs a live, multi-platform, self-modifying agent runtime. The
 two systems share no code and live in separate repos — this document does
 not merge into or replace the other. Where a principle transfers directly,
@@ -482,7 +483,7 @@ platform-adapter notification filters.
 
 ---
 
-## Part IV — This Incident's Own Principle
+## Part IV — Principles Native to This Runtime
 
 ### 16. Live Context Is Not a Trust Level
 
@@ -559,6 +560,60 @@ unconditional and unchanged. (`5bb158927`.)
 
 ---
 
+### 17. External Production Data Belongs to More Than One System
+
+A capability being reachable, credentialed, and successfully executable
+inside this runtime says nothing about whether the resource it touches is
+exclusively this system's to change.  This agent has real, working,
+unsupervised access to infrastructure — RunPod, Qdrant collections, files
+in other repositories' working trees — that other independently-operated
+systems also treat as their own authoritative domain.  Principle 16 asks
+"who is asking, and under what conditions were they verified?" for
+capabilities reachable by more than one caller *inside* this system.
+This principle asks the same question one layer out: who else, outside
+this system entirely, has a stake in the resource this action is about to
+change?
+
+*Implementation:* none yet — no mechanism currently checks, before a bulk
+or irreversible action against shared external infrastructure, whether
+another system depends on or maintains that same resource.  This is a
+real, named gap, not a solved problem.
+
+**The scar (2026-08-09/10):** this runtime wrote and ran
+`scripts/run_full_retag.py` directly into the working tree of
+`rag-pipeline` — a separate repository with its own manifesto, its own
+`DocumentDAO`, its own audit engine — and used it to perform a
+full-collection retag of `buddhism_v2` (1,234 books, ~1.74M chunks, real
+RunPod/Qdrant access, 73 minutes, zero errors).  The script itself was
+sound: it correctly reused rag-pipeline's own `core/retagging.py`
+primitives rather than reimplementing them, and its Pass 1
+(Calibre-primary subcategory) worked exactly as designed.  What it did
+not do was check whether rag-pipeline's own DocumentDAO-audited pipeline,
+or the operator, considered `buddhism_v2` mid-something — because nothing
+in this runtime asks that question before a bulk write against
+infrastructure outside its own repository.  The first anyone on the
+rag-pipeline side learned of the retag was the operator relaying a
+WhatsApp transcript after the job had already completed and its Pass 2
+output (semantic tags, overwriting rag-pipeline's own previously-verified
+Calibre-ground-truth backfill) had already degraded real data quality —
+confirmed on direct comparison: a random 12-book sample found real-Calibre-
+tag overlap on only 1.  rag-pipeline's own manifesto (Principle 20, added
+the same incident) states the operator-facing half of this obligation;
+this principle states hermes-agent's own half: a capability this runtime
+can execute against another system's infrastructure is not, by that fact
+alone, this runtime's to use without checking first.
+
+> **Rule:** Before this runtime performs a bulk, collection-wide, or
+> otherwise hard-to-reverse action against infrastructure another
+> independently-operated system also treats as authoritative — a shared
+> Qdrant collection, a shared database, a shared file tree outside this
+> repo — surface the intended action and its scope to the operator first,
+> and note explicitly which other systems are known to depend on that
+> resource.  A clean exit code from a technically-correct script is not
+> evidence this obligation was met.
+
+---
+
 ## Known Gaps
 
 Documented honestly rather than papered over with a forced principle:
@@ -575,11 +630,13 @@ Documented honestly rather than papered over with a forced principle:
   pre-flight gate. This is a real, named gap, not a principle — building
   one, if it's ever justified, is future work.
 - **rag-pipeline's own "Technical Debt" principle does not exist to carry
-  forward.** The current canonical `docs/MANIFESTO.md` in rag-pipeline is
-  v2.0 with 17 principles; it has no "Technical Debt" principle. (An
-  earlier reference to "v3.0, 18 principles" in this system was checked
-  against the actual file and found to be stale/inaccurate — flagging
-  here so the discrepancy doesn't get silently re-assumed later.)
+  forward.** As of 2026-08-10 the canonical `docs/MANIFESTO.md` in
+  rag-pipeline is v2.4 with 20 principles; it has no "Technical Debt"
+  principle. (Two earlier references in this document — "v2.0, 17
+  principles" at the top, and an even older "v3.0, 18 principles" before
+  that — were both checked against the actual file and found stale;
+  flagging the correction history here so the discrepancy doesn't get
+  silently re-assumed a third time.)
 - **Phase gates (rag-pipeline Principle 5) have no direct batch-pipeline
   analog.** This runtime ships continuously via PR review, not in
   discrete operator-gated phases. The closest real equivalent — the
@@ -593,3 +650,4 @@ Documented honestly rather than papered over with a forced principle:
 | Version | Date | Changes |
 |---------|------|---------|
 | v1.0 | 2026-07-08 | Initial hermes-agent-native manifesto. 15 principles carried forward and re-scarred from rag-pipeline's Gated Pipeline Manifesto v2.0 (State, Security, Observability, Data Privacy, Tests, Commit Contract, Self-Checking Loop, External Calls, Failures as States, Concurrency, Idempotency, Self-Healing, Simplicity, API-First, Notifications/Silence — Phase Gates folded into Self-Checking Loop, no direct analog). Principle 16 ("Live Context Is Not a Trust Level") is native to this document, drafted from the 2026-07-07 skill-write incident. Audit Engine has no analog — recorded as a known gap, not a principle. |
+| v1.1 | 2026-08-10 | Added External Production Data Belongs to More Than One System (#17), native to this document. Prompted by this runtime's uncoordinated full-collection retag of rag-pipeline's `buddhism_v2` Qdrant collection (2026-08-09) — a competently engineered, zero-error action that still caused a real downstream data-quality regression because nothing in this runtime's design asks "does another system consider this resource theirs?" before a bulk external write. Companion to rag-pipeline Manifesto v2.4's Principle 20, which states the same obligation from the other system's side. Also corrected two stale cross-references to rag-pipeline's own version/principle-count (previously said "v2.0, 17 principles"; actual is v2.4, 20). |
