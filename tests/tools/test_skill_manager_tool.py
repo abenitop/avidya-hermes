@@ -434,29 +434,45 @@ class TestSkillManageDispatcher:
         bump_patch.assert_not_called()
 
 
-    def test_background_review_delete_refuses_bundled_even_with_absorbed_into(self, tmp_path):
+    def test_background_review_delete_refuses_bundled_even_with_absorbed_into(self, tmp_path, monkeypatch):
+        """The bundled-skill protection applies even to the scheduled
+        curator, which the platform tag otherwise exempts from the live
+        fork's unconditional block (see TestCuratorPlatformTag) — bundled
+        skills are off-limits to autonomous consolidation regardless of
+        platform. Setup creates happen in the foreground: the live fork now
+        refuses `create` unconditionally too, and that's not what this test
+        is about."""
+        from tools.skill_provenance import (
+            CURATOR_PLATFORM,
+            reset_current_write_platform,
+            set_current_write_platform,
+        )
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
             set_current_write_origin,
         )
 
-        token = set_current_write_origin(BACKGROUND_REVIEW)
-        try:
-            with _skill_dir(tmp_path), \
-                 patch("tools.skill_usage.is_protected_builtin", return_value=False), \
-                 patch("tools.skill_usage.is_hub_installed", return_value=False), \
-                 patch("tools.skill_usage.is_bundled",
-                       side_effect=lambda skill_name: skill_name == "bundled"):
-                skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
-                skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
+        with _skill_dir(tmp_path), \
+             patch("tools.skill_usage.is_protected_builtin", return_value=False), \
+             patch("tools.skill_usage.is_hub_installed", return_value=False), \
+             patch("tools.skill_usage._is_curator_managed_record", return_value=True), \
+             patch("tools.skill_usage.is_bundled",
+                   side_effect=lambda skill_name: skill_name == "bundled"):
+            skill_manage(action="create", name="umbrella", content=VALID_SKILL_CONTENT)
+            skill_manage(action="create", name="bundled", content=VALID_SKILL_CONTENT)
+
+            origin_token = set_current_write_origin(BACKGROUND_REVIEW)
+            platform_token = set_current_write_platform(CURATOR_PLATFORM)
+            try:
                 raw = skill_manage(
                     action="delete",
                     name="bundled",
                     absorbed_into="umbrella",
                 )
-        finally:
-            reset_current_write_origin(token)
+            finally:
+                reset_current_write_origin(origin_token)
+                reset_current_write_platform(platform_token)
 
         result = json.loads(raw)
         assert result["success"] is False
@@ -574,11 +590,18 @@ class TestExternalSkillMutations:
         """#25839: the autonomous review fork respects pin like the curator
         does — a pinned skill is off-limits to background maintenance, even
         for patch/edit (which a foreground user-directed call is allowed to
-        perform). Without a user in the loop there is no one to consent."""
+        perform). Without a user in the loop there is no one to consent.
+
+        Runs as the scheduled curator (platform tag) so the write reaches
+        the pin check at all — the live per-turn fork is refused
+        unconditionally before it gets there; see TestCuratorPlatformTag."""
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
+            CURATOR_PLATFORM,
             reset_current_write_origin,
+            reset_current_write_platform,
             set_current_write_origin,
+            set_current_write_platform,
         )
 
         def _fake_get_record(skill_name):
@@ -586,9 +609,11 @@ class TestExternalSkillMutations:
 
         with _skill_dir(tmp_path):
             _create_skill("my-skill", VALID_SKILL_CONTENT)
-            token = set_current_write_origin(BACKGROUND_REVIEW)
+            origin_token = set_current_write_origin(BACKGROUND_REVIEW)
+            platform_token = set_current_write_platform(CURATOR_PLATFORM)
             try:
-                with patch("tools.skill_usage.get_record", side_effect=_fake_get_record):
+                with patch("tools.skill_usage.get_record", side_effect=_fake_get_record), \
+                     patch("tools.skill_usage._is_curator_managed_record", return_value=True):
                     raw = skill_manage(
                         action="patch",
                         name="my-skill",
@@ -596,7 +621,8 @@ class TestExternalSkillMutations:
                         new_string="Do the new thing.",
                     )
             finally:
-                reset_current_write_origin(token)
+                reset_current_write_origin(origin_token)
+                reset_current_write_platform(platform_token)
 
         result = json.loads(raw)
         assert result["success"] is False
@@ -604,15 +630,22 @@ class TestExternalSkillMutations:
 
 
     def test_background_review_fails_closed_when_ownership_lookup_errors(self, tmp_path):
+        """Runs as the scheduled curator (platform tag) so the write reaches
+        the ownership check at all — the live per-turn fork is refused
+        unconditionally before it gets there; see TestCuratorPlatformTag."""
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
+            CURATOR_PLATFORM,
             reset_current_write_origin,
+            reset_current_write_platform,
             set_current_write_origin,
+            set_current_write_platform,
         )
 
         with _skill_dir(tmp_path):
             _create_skill("manual-skill", VALID_SKILL_CONTENT)
-            token = set_current_write_origin(BACKGROUND_REVIEW)
+            origin_token = set_current_write_origin(BACKGROUND_REVIEW)
+            platform_token = set_current_write_platform(CURATOR_PLATFORM)
             try:
                 with patch(
                     "tools.skill_usage.load_usage",
@@ -625,7 +658,8 @@ class TestExternalSkillMutations:
                         new_string="Changed.",
                     )
             finally:
-                reset_current_write_origin(token)
+                reset_current_write_origin(origin_token)
+                reset_current_write_platform(platform_token)
 
         result = json.loads(raw)
         assert result["success"] is False
@@ -645,15 +679,24 @@ class TestBackgroundOwnershipPolicyConsistency:
     """
 
     @staticmethod
-    def _bg_patch(tmp_path, name, old, new):
+    def _bg_patch(tmp_path, name, old, new, *, platform=None):
+        """``platform=None`` (default) exercises the live per-turn fork —
+        unconditionally refused regardless of ownership, so this is the right
+        default for tests about the ownership policy itself, which need a
+        write that actually reaches the ownership check. Pass
+        ``platform="curator"`` for tests specifically about the scheduled
+        curator's write surface (e.g. the adoption path)."""
         from tools.skill_manager_tool import mark_background_review_skill_read
         from tools.skill_provenance import (
             BACKGROUND_REVIEW,
             reset_current_write_origin,
+            reset_current_write_platform,
             set_current_write_origin,
+            set_current_write_platform,
         )
 
         token = set_current_write_origin(BACKGROUND_REVIEW)
+        platform_token = set_current_write_platform(platform or "")
         try:
             mark_background_review_skill_read(tmp_path / name / "SKILL.md")
             return json.loads(skill_manage(
@@ -661,6 +704,7 @@ class TestBackgroundOwnershipPolicyConsistency:
             ))
         finally:
             reset_current_write_origin(token)
+            reset_current_write_platform(platform_token)
 
     def test_repeated_identical_write_gets_the_same_answer(self, tmp_path, monkeypatch):
         """The real #67140 shape: no stubbing of load_usage, so the first write's
@@ -696,13 +740,17 @@ class TestBackgroundOwnershipPolicyConsistency:
         assert res["success"] is True
 
     def test_adopted_skill_becomes_writable_by_autonomous_curation(self, tmp_path, monkeypatch):
-        """Adoption is the documented path from refused to allowed."""
+        """Adoption is the documented path from refused to allowed — for the
+        scheduled curator specifically. (The live per-turn fork is refused
+        unconditionally regardless of ownership; see TestCuratorPlatformTag.)
+        """
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         with _skill_dir(tmp_path):
             _create_skill("adopt-me", VALID_SKILL_CONTENT)
             with patch("tools.skill_usage.load_usage", return_value={}):
                 before = self._bg_patch(
                     tmp_path, "adopt-me", "Do the thing.", "Do the new thing.",
+                    platform="curator",
                 )
             with patch(
                 "tools.skill_usage.load_usage",
@@ -713,6 +761,7 @@ class TestBackgroundOwnershipPolicyConsistency:
             ):
                 after = self._bg_patch(
                     tmp_path, "adopt-me", "Do the thing.", "Do the new thing.",
+                    platform="curator",
                 )
 
         assert before["success"] is False
@@ -840,12 +889,16 @@ class TestDeleteSkillRmtreeGuard:
 
 @contextmanager
 def _curator_pass(tmp_path, *, monkeypatch):
-    """Run the body as the curator/background-review fork.
+    """Run the body as the scheduled curator job (agent/curator.py).
 
     Points HERMES_HOME at ``tmp_path/.hermes`` so skill_usage's archive path
     (``get_hermes_home()``) resolves into the same tree the skill manager
-    searches, and flips ``is_background_review()`` → True so the consolidation
-    guard fires.
+    searches, flips ``is_background_review()`` → True so the consolidation
+    guard fires, and tags the write-platform ContextVar as "curator" —
+    matching agent/curator.py's real ``AIAgent(platform="curator", ...)`` —
+    so ``_background_review_write_guard``'s unconditional block (scoped to
+    the live per-turn fork only, see ``skill_manager_tool.py``) does not also
+    swallow the curator's own, separately-guarded consolidation deletes.
 
     Also stubs the ownership check to report every skill as curator-managed.
     The ownership guard runs BEFORE the consolidation / read-before-write
@@ -855,6 +908,41 @@ def _curator_pass(tmp_path, *, monkeypatch):
     ever operates on managed sediment, so "managed" is the correct premise
     here; tests that specifically exercise the ownership guard set their own
     records instead.
+    """
+    from tools.skill_provenance import (
+        CURATOR_PLATFORM,
+        reset_current_write_platform,
+        set_current_write_platform,
+    )
+
+    hermes_home = tmp_path / ".hermes"
+    skills_root = hermes_home / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    platform_token = set_current_write_platform(CURATOR_PLATFORM)
+    try:
+        with patch("tools.skill_manager_tool.SKILLS_DIR", skills_root), \
+             patch("tools.skills_tool.SKILLS_DIR", skills_root), \
+             patch("agent.skill_utils.get_all_skills_dirs", return_value=[skills_root]), \
+             patch("tools.skill_usage._is_curator_managed_record", return_value=True), \
+             patch("tools.skill_provenance.is_background_review", return_value=True):
+            yield skills_root
+    finally:
+        reset_current_write_platform(platform_token)
+
+
+@contextmanager
+def _live_fork_pass(tmp_path, *, monkeypatch):
+    """Run the body as the live per-turn background_review fork — the
+    conversation-triggered fork implicated in the 2026-07-07 incident, as
+    opposed to _curator_pass's scheduled curator job.
+
+    Same is_background_review()=True origin and directory setup as
+    _curator_pass (including the ownership-check stub, for the same reason:
+    since #67140 a skill with no usage record fails closed), but deliberately
+    does NOT tag the write-platform ContextVar as "curator" (it's left at its
+    default), so _background_review_write_guard's unconditional block
+    applies exactly as it does for a real live conversation.
     """
     hermes_home = tmp_path / ".hermes"
     skills_root = hermes_home / "skills"
@@ -947,3 +1035,91 @@ class TestCuratorConsolidationDeleteGuard:
             assert allowed["success"] is True, allowed
 
         _reset_background_review_read_marks()
+
+
+# ---------------------------------------------------------------------------
+# Curator-vs-live-fork write-platform tag
+# ---------------------------------------------------------------------------
+#
+# _background_review_write_guard's unconditional block (both files share the
+# BACKGROUND_REVIEW write origin) was originally all-or-nothing: refuse every
+# background-review write, full stop. That's correct for the live per-turn
+# conversation fork (an unattended write from a live conversation reaching a
+# production skill file with no human review is exactly the incident this
+# guard exists to prevent) but it also silently disabled the scheduled
+# curator job's legitimate, already-independently-guarded consolidation work
+# (TestCuratorConsolidationDeleteGuard above) for no added safety benefit —
+# that job is cron-triggered rather than conversation-triggered, and its own
+# deletes are already fail-closed via _curator_consolidation_delete_guard.
+#
+# tools/skill_provenance.py's write-platform ContextVar (set once per turn in
+# agent/turn_context.py from the running agent's ``platform`` attribute, e.g.
+# "curator" for agent/curator.py's scheduled job vs "whatsapp"/"discord"/...
+# for a live conversation) lets the guard tell the two apart and only refuse
+# the live fork.
+class TestCuratorPlatformTag:
+    def test_live_fork_create_refused(self, tmp_path, monkeypatch):
+        with _live_fork_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            raw = skill_manage(action="create", name="new-skill", content=VALID_SKILL_CONTENT)
+        result = json.loads(raw)
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()
+        assert not (skills_root / "new-skill").exists()
+
+    def test_curator_create_still_allowed(self, tmp_path, monkeypatch):
+        """Counterpart to test_live_fork_create_refused: the scheduled
+        curator legitimately creates new umbrella SKILL.md files during
+        consolidation, and was never implicated in the incident this guard
+        was added for."""
+        with _curator_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            raw = skill_manage(action="create", name="new-umbrella", content=_skill_content("new-umbrella"))
+        result = json.loads(raw)
+        assert result["success"] is True, result
+        assert (skills_root / "new-umbrella" / "SKILL.md").exists()
+
+    def test_live_fork_patch_refused_even_when_curator_managed(self, tmp_path, monkeypatch):
+        """The platform tag, not skill ownership, is what the live fork is
+        refused on — a curator-managed skill is still off-limits to the live
+        fork, distinguishing this guard from the separate ownership guard."""
+        with _live_fork_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            _create_curator_skill("managed-skill", VALID_SKILL_CONTENT)
+            raw = skill_manage(
+                action="patch", name="managed-skill",
+                old_string="Step 1: Do the thing.", new_string="Changed.",
+            )
+        result = json.loads(raw)
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()
+        assert "Changed." not in (skills_root / "managed-skill" / "SKILL.md").read_text()
+
+    def test_curator_patch_allowed_on_curator_managed_skill(self, tmp_path, monkeypatch):
+        from tools.skill_manager_tool import mark_background_review_skill_read
+
+        with _curator_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            _create_curator_skill("managed-skill", VALID_SKILL_CONTENT)
+            mark_background_review_skill_read(skills_root / "managed-skill" / "SKILL.md")
+            raw = skill_manage(
+                action="patch", name="managed-skill",
+                old_string="Step 1: Do the thing.", new_string="Changed.",
+            )
+        result = json.loads(raw)
+        assert result["success"] is True, result
+        assert "Changed." in (skills_root / "managed-skill" / "SKILL.md").read_text()
+
+    def test_platform_lookup_failure_fails_closed_to_live_fork(self, tmp_path, monkeypatch):
+        """If the platform can't be determined, treat the write as coming
+        from the live per-turn fork rather than silently granting the
+        curator's wider write surface."""
+        from tools.skill_manager_tool import mark_background_review_skill_read
+
+        with _curator_pass(tmp_path, monkeypatch=monkeypatch) as skills_root:
+            _create_curator_skill("managed-skill", VALID_SKILL_CONTENT)
+            mark_background_review_skill_read(skills_root / "managed-skill" / "SKILL.md")
+            with patch("tools.skill_provenance.is_curator_platform", side_effect=RuntimeError("boom")):
+                raw = skill_manage(
+                    action="patch", name="managed-skill",
+                    old_string="Step 1: Do the thing.", new_string="Changed.",
+                )
+        result = json.loads(raw)
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()

@@ -93,7 +93,7 @@ from agent.turn_finalizer import finalize_turn
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from hermes_constants import PARTIAL_STREAM_STUB_ID
 from hermes_logging import set_session_context
-from tools.skill_provenance import set_current_write_origin
+from tools.skill_provenance import set_current_write_origin, set_current_write_platform
 from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
@@ -1610,6 +1610,7 @@ def run_conversation(
         summarize_user_message_for_log=_summarize_user_message_for_log,
         set_session_context=set_session_context,
         set_current_write_origin=set_current_write_origin,
+        set_current_write_platform=set_current_write_platform,
         ra=_ra,
         # MoA turns append per-call aggregated context to the API copy of the
         # user message, so no byte-stable api_content sidecar can be stamped.

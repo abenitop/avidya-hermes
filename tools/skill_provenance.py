@@ -76,3 +76,47 @@ def is_background_review() -> bool:
     """Convenience: True iff the current write origin is the background
     review fork."""
     return get_current_write_origin() == BACKGROUND_REVIEW
+
+
+_write_platform: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "skill_write_platform",
+    default="",
+)
+
+# The tag agent/curator.py's forked review_agent carries
+# (`AIAgent(platform="curator", ...)`), distinct from the live per-turn
+# background_review fork, which inherits its parent conversation's platform
+# (whatsapp/discord/telegram/cli/gateway/...) and is never "curator". Added
+# 2026-07-08 to let skill_manager_tool.py's incident guard distinguish the
+# two: both share write origin BACKGROUND_REVIEW (see module docstring), but
+# only the live fork was implicated in the 2026-07-07 unattended-write
+# incident — the scheduled curator has its own, older, incident-informed
+# safety net (_curator_consolidation_delete_guard, #29912) and should not be
+# swept into a block meant for the other mechanism.
+CURATOR_PLATFORM = "curator"
+
+
+def set_current_write_platform(platform: str) -> contextvars.Token[str]:
+    """Bind the active turn's agent platform to the current context.
+
+    Returns a Token the caller must pass to reset_current_write_platform
+    in a finally block.
+    """
+    return _write_platform.set(platform or "")
+
+
+def reset_current_write_platform(token: contextvars.Token[str]) -> None:
+    """Restore the prior write platform context."""
+    _write_platform.reset(token)
+
+
+def get_current_write_platform() -> str:
+    """Return the active turn's agent platform (empty string if unset)."""
+    return _write_platform.get()
+
+
+def is_curator_platform() -> bool:
+    """Convenience: True iff the current turn's agent platform is the
+    scheduled curator job (agent/curator.py), not the live per-turn
+    background_review fork or any foreground platform."""
+    return get_current_write_platform() == CURATOR_PLATFORM
