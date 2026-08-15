@@ -1,0 +1,274 @@
+DHARMA-LIBRARY-PDF-FALLBACK — PART B REBUILD, DRAFT FOR REVIEW
+Prepared for Antonio, 2026-07-08. DRAFT ONLY. Nothing in this file has been
+written into SKILL.md or any reference file. Per instruction, these drafts
+are presented for review before anything touches the live skill again.
+
+================================================================================
+0. IMPORTANT FINDING BEFORE THE DRAFTS — the verification work itself surfaced
+   a second failure of the same kind this whole incident is about
+================================================================================
+
+While verifying the deleted missing-pdfs-inventory.md's book-by-book claims
+(as asked: "verify this is still accurate and check whether there are
+others"), I found the claims were NOT accurate. Three of the four
+"confirmed missing" books, plus the separately-claimed Achard title, are
+NOT missing — they exist, as real, readable PDFs, in a location neither the
+incident-night write nor my own earlier Item-1 content review ever checked:
+`/opt/calibre-web/library/` — the actual "live Calibre Web" ingest source
+documented in the untouched, legitimate `references/qdrant-pipeline-
+architecture.md` file ("~728 author folders... this is what the live
+pipeline actually ingests from"). Both the incident-night fork and I
+independently made the same mistake: checking only `/opt/agents/library/
+buddhism/`, which is a smaller, older, partially-synced mirror, and
+concluding "absent" from an incomplete search. I'm flagging this plainly
+rather than quietly folding it into a clean-looking table — it's the same
+category of error (an unverified absence claim) that caused the incident,
+just caught this time during the rebuild's own verification step instead
+of after it shipped.
+
+Corrected findings, checked against BOTH `/opt/agents/library/buddhism/`
+and `/opt/calibre-web/library/`:
+
+  Rick Repetti — Buddhist Perspectives on Free Will: Agentless Agency?
+    PDF EXISTS: /opt/calibre-web/library/Rick Repetti/Buddhist Perspectives
+    on Free Will_ Agentless Agency_ (1294)/....pdf — 2,215,911 bytes,
+    confirmed readable (pdftotext returns "BUDDHIST PERSPECTIVES ON FREE
+    WILL: AGENTLESS AGENCY? Edited by...").
+    PREVIOUSLY CLAIMED: missing. WRONG.
+
+  Walpola Rahula — What the Buddha Taught
+    PDF EXISTS: /opt/calibre-web/library/Walpola Rahula/What the Buddha
+    Taught (450)/....pdf — 3,361,314 bytes, confirmed readable.
+    PREVIOUSLY CLAIMED: missing. WRONG.
+
+  Elias Capriles — Beyond Mind Papers (Vol 1, Vol 2), Buddhism and Dzogchen
+  Vol I, and two more titles
+    PDFs EXIST: 5 real files under /opt/calibre-web/library/Elias Capriles/,
+    1.7MB-8.5MB each. Qdrant --show-text also confirmed retrieving real
+    Capriles text directly (author field on the hit reads "Elias Capriles").
+    PREVIOUSLY CLAIMED: missing (both volumes). WRONG.
+
+  Jean-Luc Achard — "Four Visions of Thogel"
+    Real title: "The System of the Four Visions of Thögel."
+    PDF EXISTS: /opt/calibre-web/library/Jean-Luc Achard/The System of the
+    Four Visions of Thogel (1539)/....pdf, confirmed readable (pdftotext
+    returns "The System of the Four Visions of Thögel / By Jean-Luc
+    Achard"). Four other Achard titles also present in the same directory
+    (Identifying the Obstacles to One's Practice, The Dzogchen Path of
+    Clear-Light, The Five Modes of Liberation, The Principles of Trekcho
+    and Thogel, The Six Lamps).
+    PREVIOUSLY CLAIMED: missing/backup-only. WRONG — and this specific
+    claim is STILL LIVE in the current, already-reverted SKILL.md right
+    now (line 127: "This text by Jean-Luc Achard is NOT in the active
+    library subcategory folders — it exists only in backup directories...
+    Use TGM3 as primary source"). This one predates the incident exactly
+    like Claim A did, survived the Part A revert for the same reason
+    (it wasn't part of the incident-night diff), and needs the same
+    treatment. Flagging it now rather than silently leaving a second known-
+    false claim in the file while rebuilding the rest around it.
+
+  Bernard Feltz — Free Will, Causality, and Neuroscience
+    Checked both locations. /opt/agents/library/buddhism: only dated
+    backup/ folders. /opt/calibre-web/library/Bernard Feltz: the author
+    directory exists but is completely empty — no PDF, no cover.jpg, no
+    metadata.opf, nothing. This is the one book where "missing" holds up
+    under the corrected methodology.
+    PREVIOUSLY CLAIMED: missing. CONFIRMED ACCURATE (this one only).
+
+I did not attempt --show-text confirmation for every single one of these
+against Qdrant (one query timed out on the embedding model's cold-start,
+consistent with the skill's own documented "one call max, cold-start cost"
+pitfall) — the PDF-existence findings above are filesystem facts,
+independently verified, not dependent on the Qdrant check succeeding.
+
+================================================================================
+1. DRAFT — corrected `--show-text` / "(no text)" documentation
+   (fixes Claim A; replaces the "When to use" section)
+================================================================================
+
+Proposed replacement for the "When to use" section of SKILL.md:
+
+---
+## When to use
+- `library-search --json` omits chunk text by default — pass `--show-text`
+  to get it. Without the flag, a hit's JSON has no `text` key at all
+  (renders as "(no text)" in some callers); this is a CLI default, not a
+  data problem. Verified directly, repeatedly, against real chunks
+  (Repetti, Capriles, general free-will queries): the same chunks that
+  show "(no text)" without the flag return full, real text with it.
+- Use `library-search --show-text` FIRST for most lookups — it's faster
+  than the PDF fallback (no `pdftotext` round-trip) and the text is
+  already there. Reach for this PDF-fallback skill when: `--show-text`
+  output is too fragmentary to work with (chunk boundaries can cut
+  mid-sentence), you need surrounding context beyond one chunk, or you
+  need to search across the full text of a specific known book rather
+  than semantic-search chunks of it.
+- Also applies when: semantic search scores are low, results are
+  off-topic, or a specific book was requested but not surfaced by
+  `library-search` at all.
+
+**Caveat, stated honestly:** every chunk checked in this and the prior
+session's testing returned real text once `--show-text` was passed — no
+genuinely-empty-payload chunk was found. That is not the same claim as "no
+such chunk exists anywhere in the 1.1M-point collection" — a full audit of
+the whole collection for genuinely empty `text` payloads has not been done
+(the same scroll-timeout limits noted elsewhere in this skill apply). If a
+specific chunk still shows no text WITH `--show-text` passed, that is a
+real, different, worth-investigating case — don't assume it's the same
+missing-flag issue.
+---
+
+Also removes the now-redundant standalone pitfall bullet ("library-search
+--source <pdf> --chunk <N> flags do NOT work — they return empty output")
+— verified false as *stated* in the earlier content review (those flags
+don't exist in the script at all; invoking them errors rather than
+returning empty output). Proposed replacement bullet for the Pitfalls
+section:
+
+---
+- `library-search` has no `--source`/`--chunk` flags for retrieving a
+  specific known chunk (checked directly against the script's argument
+  parser — only `--category`, `--query`, `--subcategory`, `--tags`,
+  `--estado`, `--language`, `--top`, `--show-text`, `--json` exist).
+  Passing them errors out (unrecognized arguments), it does not silently
+  return empty output. To pull a specific known chunk, use `--show-text`
+  with a targeted `--query`, or fall back to `pdftotext` + `grep` on the
+  known file.
+---
+
+================================================================================
+1b. DRAFT — Achard line fix, folded in with Claim A per instruction
+================================================================================
+
+Current live text (SKILL.md, line 127, inside the "Thögal four visions —
+TGM3 knowledge bank" section):
+
+  "**Achard "Four Visions of Thogel" location:** This text by Jean-Luc
+  Achard is NOT in the active library subcategory folders — it exists
+  only in backup directories (`/opt/agents/library/buddhism/backup/
+  2026-06-21/Jean-Luc Achard/...`). Use TGM3 as primary source for four
+  visions doctrine."
+
+Proposed replacement:
+
+---
+**Achard "Four Visions of Thogel" location:** Real title: *The System of
+the Four Visions of Thögel*. PDF EXISTS at `/opt/calibre-web/library/
+Jean-Luc Achard/The System of the Four Visions of Thogel (1539)/` —
+confirmed readable via `pdftotext` (verified 2026-07-08). Four other
+Achard titles are in the same author directory: *Identifying the
+Obstacles to One's Practice*, *The Dzogchen Path of Clear-Light*, *The
+Five Modes of Liberation*, *The Principles of Trekcho and Thogel*, *The
+Six Lamps*. Previously documented here as backup-only/unavailable — that
+was wrong (only `/opt/agents/library/buddhism` was checked, not the live
+`/opt/calibre-web/library`; see `references/missing-pdfs-inventory.md`
+for why both locations matter). TGM3 remains a rich complementary source
+for Thögal practice mechanics generally, but Achard's own text is
+directly available now too — use both.
+---
+
+================================================================================
+2. DRAFT — corrected, verified PDF-availability inventory
+   (replaces the deleted missing-pdfs-inventory.md)
+================================================================================
+
+Proposed new reference file, `references/missing-pdfs-inventory.md`:
+
+---
+# PDF Availability — Verified Against Both Library Locations
+
+Last verified: 2026-07-08. Two independent facts, checked separately —
+do not conflate them (this is the exact conflation that caused the
+2026-07-07 incident):
+
+1. Does a PDF file exist on disk for this book?
+2. Is the book's text retrievable at all?
+
+These are independent. A book can have real Qdrant chunk text (retrievable
+via `library-search --show-text`) with NO pdf file, and the reverse is
+never actually the issue in practice — if a PDF exists, `pdftotext` on it
+always works.
+
+**Two library locations exist — check both before concluding a PDF is
+missing.** This is the specific mistake that produced a wrong "confirmed
+missing" list on 2026-07-07: only `/opt/agents/library/buddhism/` (the
+smaller, older, partially-synced mirror — ~93 originally-indexed texts
+plus some newer additions) was checked. The actual live ingest source is
+`/opt/calibre-web/library/` (~728 author folders — see `references/
+qdrant-pipeline-architecture.md`). A book absent from the first location
+is very often present in the second.
+
+```bash
+find /opt/agents/library/buddhism -iname "*<author-or-title>*" 2>/dev/null
+find /opt/calibre-web/library -iname "*<author-or-title>*" 2>/dev/null
+```
+
+Only trust "the PDF is missing" if BOTH searches come back empty (or
+backup-only in both).
+
+## Confirmed PDF-available (previously and wrongly listed as missing)
+
+| Author | Title | Real location |
+|--------|-------|----------------|
+| Rick Repetti | Buddhist Perspectives on Free Will: Agentless Agency? | `/opt/calibre-web/library/Rick Repetti/` |
+| Walpola Rahula | What the Buddha Taught | `/opt/calibre-web/library/Walpola Rahula/` |
+| Elias Capriles | The Beyond Mind Papers Vol. 1 & 2, Buddhism and Dzogchen Vol. I (+2 more titles) | `/opt/calibre-web/library/Elias Capriles/` |
+| Jean-Luc Achard | The System of the Four Visions of Thögel (+4 more titles) | `/opt/calibre-web/library/Jean-Luc Achard/` |
+
+All four confirmed real and readable via direct `pdftotext` test as of
+2026-07-08.
+
+## Confirmed still genuinely unavailable
+
+| Author | Title | Notes |
+|--------|-------|-------|
+| Bernard Feltz | Free Will, Causality, and Neuroscience | Author folder exists at `/opt/calibre-web/library/Bernard Feltz/` but is completely empty — no PDF, no cover, no metadata. Also absent from `/opt/agents/library/buddhism` (backup/ only). Checked both locations 2026-07-08. |
+
+**Recommended action for Feltz specifically:** tell Antonio directly and
+ask him to provide the file, or check whether Qdrant has indexed chunk
+text for it independent of the PDF (untested as of this writing — if
+`library-search --show-text` returns real text for a Feltz query despite
+no PDF, that's citable on its own, per the two-independent-facts point
+above).
+
+## Not yet systematically audited
+
+The four titles above were checked because they were specifically named in
+the prior (deleted, inaccurate) inventory. A systematic scan of ALL ~708
+backup-only-appearing author names against `/opt/calibre-web/library/` was
+attempted and abandoned — it timed out after 2 minutes with ~200 of 708
+authors checked, and (once the correct comparison path was used) it's
+likely the true "genuinely missing" list is much shorter than 708, since
+most backup-only hits were themselves an artifact of not checking
+`/opt/calibre-web/library/`. A real full audit, done properly, is separate
+scoped work — not attempted here beyond the five specifically-named books.
+---
+
+================================================================================
+3. WHAT THIS DRAFT DOES NOT INCLUDE
+================================================================================
+
+- The free-will cross-tradition philosophical content itself
+  (`references/free-will-cross-tradition.md`) is untouched — it was already
+  confirmed clean and was kept during the Part A revert. Nothing here
+  proposes changing it.
+- A full systematic audit of all ~708 potentially-backup-only authors
+  against the real live library — flagged above as separate, unscoped
+  future work, not silently attempted here.
+- Any actual file write. Everything above is a proposed replacement,
+  presented in full, for SKILL.md's "When to use" section, one Pitfalls
+  bullet, and a rebuilt missing-pdfs-inventory.md. Nothing has been written
+  into the live skill.
+
+================================================================================
+4. RECOMMENDATION
+================================================================================
+
+Fix the Achard line (SKILL.md line 127) in the same pass as Claim A — it's
+the same category of pre-existing, incident-unrelated false claim,
+discovered during this same verification work, and leaving one known-false
+claim in place while rewriting the rest around it repeats exactly the
+partial-fix risk that motivated the full revert in Part A. Your call on
+whether "fold Claim A into Part B" was meant to implicitly cover this too,
+or whether it needs separate, explicit sign-off — asking rather than
+assuming.

@@ -1,0 +1,254 @@
+CONSOLIDATED PENDING WORK — 5 TASKS
+2026-07-08. Each task treated independently, per instruction. No task
+authorized another; scope-expansion points are flagged, not acted on.
+
+================================================================================
+TASK 1 — Fix Item 4: interim assistant narration leaking to WhatsApp
+================================================================================
+STATUS: DONE.
+
+Change: ~/.hermes/config.yaml, added under display: (was not present before):
+
+  display:
+    ...
+    platforms:
+      whatsapp:
+        interim_assistant_messages: false
+
+Verification (three layers, no live WhatsApp round-trip attempted — see
+note below on why):
+
+1. Direct execution of the real production resolver
+   (gateway.run._resolve_gateway_display_bool) against the real, edited
+   config.yaml:
+     whatsapp -> False
+     discord, telegram, slack, signal, line -> True (unaffected, default)
+
+2. Traced the invocation site (run_agent.py:4601-4614,
+   _emit_interim_assistant_message): `cb = getattr(self,
+   "interim_assistant_callback", None); if cb is None: return`. Since
+   gateway/run.py sets `agent.interim_assistant_callback = None` whenever
+   `_want_interim_messages` is False, this becomes a guaranteed no-op for
+   WhatsApp turns specifically — not just "config says so" but "the actual
+   call site can't fire."
+
+3. Ran the full relevant existing test suite (display_config,
+   run_progress_topics, stream_consumer, mattermost — 262 tests): all pass,
+   confirming the underlying mechanism this config modulates works
+   correctly.
+
+Why no live round-trip: sending an actual test message through Antonio's
+real WhatsApp wasn't explicitly authorized by this task, and no safe local/
+mock bridge harness was found to substitute. The three-layer verification
+above proves the mechanism directly and conclusively without that step —
+flagging the gap in verification method honestly rather than silently
+treating it as equivalent to a live test.
+
+Confirmed scoped to WhatsApp only: proven directly in (1) above, not
+assumed.
+
+Commit status: config.yaml is NOT under version control. Checked
+~/.hermes/ root directly — no .git anywhere. This is the same gap as the
+skills-versioning issue logged earlier, but a SEPARATE untracked path
+(~/.hermes/config.yaml is not inside ~/.hermes/skills/, so today's earlier
+git init for the skills directory does not cover it). Flagging as
+instructed; not fixed here — out of this task's scope.
+
+Held, not done here per instruction: the deeper design question (should
+Avidya narrate its process at all, with or without visual distinction) —
+this was a config-only mitigation, not a resolution of that question.
+
+================================================================================
+TASK 2 — What libros.ts-al.com / Calibre Web actually hosts
+================================================================================
+STATUS: DONE (investigation only, as requested).
+
+/opt/calibre-web/library is an active `rclone mount` (systemd unit
+rclone-library.service, Before=calibre-web.service, Requires= by
+calibre-web.service) of Koofr folder "Calibre Libraries/Buddhism Library
+PDF", via rclone remote `calibreweb`.
+
+rclone.conf, [calibreweb]: type=koofr, provider=koofr,
+user=abenitop@gmail.com.
+
+rag-pipeline's own sync-buddhism.sh / sync-libraries.sh use a DIFFERENT
+rclone remote, `agents-library` — also type=koofr,
+user=abenitop@gmail.com (same account) — but pulling from different Koofr
+subfolders ("Longchenpa", "Legal") into a local, periodically-`rclone
+sync`'d copy at /opt/agents/library/buddhism/calibre/ (~19 author folders,
+the "controlled 44-book" library).
+
+Confirmed real content overlap directly: both "Longchen Rabjam" and
+"Longchenpa" author folders exist in BOTH /opt/calibre-web/library/ (the
+live, ~728-author mount) and /opt/agents/library/buddhism/calibre/ (the
+smaller synced copy).
+
+Direct answer: same underlying Koofr account, not the same sync target.
+The live ingest source (calibre-web's mount, what library-ingest actually
+reads per qdrant-pipeline-architecture.md) is broader than and overlaps
+with rag-pipeline's own separately-synced smaller copy — not two
+independent sources, but not literally identical either. No design work
+attempted, as instructed.
+
+================================================================================
+TASK 3 — Create Qdrant alias buddhism -> buddhism_v2
+================================================================================
+STATUS: BLOCKED on item 2 (alias creation itself). Items 1, 3(n/a), 4, 5 done.
+
+Item 1 (alias mechanism correctness): confirmed Qdrant 1.17.1's
+update_collection_aliases/create_alias is metadata-only — no reindex, no
+data copy, by design in this Qdrant version (long-standing feature, not
+new in 1.17).
+
+Item 2 (create the alias): BLOCKED. Attempted the real API call:
+  POST /collections/aliases {"actions":[{"create_alias":
+    {"collection_name":"buddhism_v2","alias_name":"buddhism"}}]}
+Qdrant rejected it: "Wrong input: Collection `buddhism` already exists!"
+`buddhism` (v1) is a REAL, live collection right now — 768-dim,
+1,126,601 points, status=green — not an empty name waiting for an alias.
+Collections and aliases share one namespace in Qdrant; you cannot alias a
+name a real collection already holds. This attempt was read-only/
+validation-only — Qdrant rejected before any state change, confirmed no
+side effects. Did not attempt a workaround (e.g. renaming/deleting v1
+first) — that's Phase F archival territory, explicitly out of scope here
+per the task's own item 5 framing ("do not archive without separate
+confirmation"). Reporting the blocker rather than resolving it unilaterally.
+
+Item 3 (verify alias query results match): not reached, blocked by item 2.
+
+Item 4 (inventory of literal "buddhism_v2" references): grepped
+rag-pipeline, hermes-agent, and the dharma-library-pdf-fallback skill:
+  - rag-pipeline: core/migration.py (MigrationRun.target_collection
+    default and CLI args), data/pipeline.db's migration_runs rows (both
+    runs), config.yaml's qdrant.collection setting (rag-pipeline's own
+    config — separate from hermes's).
+  - /opt/agents/shared/bin/library-search: --category argument accepts
+    "buddhism_v2" as a literal value (confirmed earlier in this
+    engagement, e.g. every library-search call this session used
+    --category buddhism_v2 directly).
+  - dharma-library-pdf-fallback/SKILL.md and its references/ files:
+    multiple literal mentions (Qdrant collection name, REST API examples,
+    audit script references).
+  No changes made to any of these, as instructed — inventory only.
+
+Item 5 (buddhism_v1 status / Phase F window): migration_runs table,
+data/pipeline.db:
+  80dfb711-...: status=PHASE_D_COMPLETE, switched_at=2026-07-02T14:22:40Z
+  b7a2d470-...: status=PHASE_B_COMPLETE, never completed (see Task 5 below)
+buddhism (v1) confirmed still fully present: 768-dim, 1,126,601 points,
+status=green — never archived. Switch happened 2026-07-02; today is
+2026-07-08 — roughly 6 days (~144h) since switched_at, well past the
+documented 48h monitoring window. The window has elapsed. Not archiving —
+reporting status only, per explicit instruction.
+
+================================================================================
+TASK 4 — Wire the audit engine into migrations (held item 5)
+================================================================================
+STATUS: Implemented, tests-first, NOT COMMITTED — plan/diff shown below
+per instruction, holding for confirmation.
+
+Existing PipelineAuditor (core/auditor.py) is built around DocumentDAO /
+filesystem artifacts (OCR/chunk-cache) for the single-document ingest
+lifecycle — its own _check_qdrant method is explicitly a stub
+("Exact per-doc check deferred to future phase", hardcodes
+qdrant_discrepancy=0 whenever Qdrant is reachable at all). It isn't shaped
+to compare two Qdrant collections against each other, so it isn't a
+drop-in call into migration.py. Built the migration-specific equivalent
+directly in MigrationOrchestrator instead, following the same audit-engine
+principle (independent second view of the same data, hard stop on
+non-compliance) rather than importing a mismatched interface.
+
+_verify_collection (core/migration.py) previously only checked the target
+collection's point count was nonzero — the exact gap that let
+201,295 duplicate/orphaned points (found in Task 5 below) pass Phase C as
+"verified" on 2026-07-02.
+
+Added _audit_payload_integrity(collection_name), called from
+_verify_collection after the existing count check:
+- Full scroll of the target collection (not sampled — migrations are rare,
+  operator-gated events, not a hot path; ~2-3 min is worth it for
+  something Phase D irreversibly depends on), payload-projected to
+  text/source_pdf/chunk_index only.
+- Flags any point with empty/missing text (the root incident class this
+  whole engagement traces back to).
+- Flags any (source_pdf, chunk_index) pair appearing more than once,
+  reporting the count and the excess/orphaned total.
+- Either finding is a hard stop: phase_c fails (status -> FAILED, issue
+  recorded in error_log) exactly like the existing "0 vectors" case — a
+  future migration cannot reach PHASE_C_COMPLETE, and therefore cannot
+  reach Phase D (the operator-gated production switch), while either
+  problem exists.
+
+Tests written FIRST, confirmed failing before implementation, then
+confirmed passing after (shown in transcript):
+- test_phase_c_sets_verified_at (updated — now also mocks .scroll() with
+  clean data; previously only mocked .get_collection())
+- test_phase_c_detects_empty_payload_text (new)
+- test_phase_c_detects_duplicate_points (new)
+- test_phase_c_paginates_scroll_for_payload_audit (new — proves pagination
+  is actually followed, not just the first page)
+
+Full suite: tests/test_migration.py 30/30. Repo-wide: 217/221 (same 4
+pre-existing, unrelated sentence_transformers failures as every other task
+in this engagement).
+
+git diff --stat:
+  core/migration.py       |  72 ++++++++++++++++++++++++++++++++-
+  tests/test_migration.py | 104 +++++++++++++++++++++++++++++++++++++++++++++++-
+  2 files changed, 174 insertions(+), 2 deletions(-)
+
+NOT COMMITTED. Per instruction to show the plan before committing anything
+touching the migration pipeline — holding for explicit go-ahead.
+
+================================================================================
+TASK 5 — Investigate the two migration runs (held item 6)
+================================================================================
+STATUS: DONE. Real, confirmed finding. Nothing deleted.
+
+Both migration_runs rows target the SAME collection, buddhism_v2:
+  b7a2d470-...  started 2026-06-24T13:57:24Z, status=PHASE_B_COMPLETE,
+                completed_at=NULL (abandoned — the "06-24" run)
+  80dfb711-...  started 2026-06-27T03:22:54Z, status=PHASE_D_COMPLETE
+                (the "06-27" run that completed normally)
+
+Root cause identified in code: core/migration.py's _migrate_batch
+generates point IDs via `uuid.uuid4()` — random, not derived from source
+content (doc_id/chunk_index/hash). phase_b itself has no resume/skip logic
+— it unconditionally re-embeds and upserts every chunk from the source
+collection every time it runs, regardless of what a prior run already
+wrote. Combined, these two facts mean: if the abandoned run's Phase B
+actually wrote real data before stalling, and the second run's own Phase B
+then reprocessed the same source data fresh, Qdrant's upsert-by-ID
+idempotency could not have caught it — different random UUIDs for the same
+underlying chunk both persist as separate points.
+
+Verified this empirically, not just from code reasoning — scrolled the
+full buddhism_v2 collection (1,126,601 points, ~66s with the source_pdf
+payload index from Task work earlier today) and counted occurrences of
+each (source_pdf, chunk_index) pair:
+
+  distinct (source_pdf, chunk_index) pairs:  925,306
+  pairs appearing MORE THAN ONCE:            190,243
+  total points involved in duplication:      391,538
+  excess/orphaned points (true duplicates):  201,295
+
+Roughly 20.6% of unique source chunks exist twice in buddhism_v2 right
+now, each duplicate carrying a distinct random point ID and therefore
+invisible to any ID-based dedup. Example duplicates (verbatim from the
+scroll, confirming these are real books, not synthetic/test data):
+  "Mipham's Dialectics and the Debates on Emptiness..." (Karma Phuntsho),
+    chunk 223, x2
+  "Mahaprajnaparamitasastra - Vol. 4" (Nagarjuna), chunk 179, x2
+  "The Precious Treasury of Philosophical Systems" (Longchen Rabjam),
+    chunk 649, x2
+  "Treasury of Genuine Meaning - V3" (Longchen Rabjam), chunk 2882, x2
+
+This is exactly the class of problem Task 4's new payload-integrity check
+(above) is built to catch — had it existed on 2026-07-02, Phase C would
+have failed this migration rather than reporting it verified.
+
+NOTHING DELETED. This was 100% read-only investigation (Qdrant scroll
+queries only). Reporting scope and root cause; the actual dedup/cleanup
+decision (which of each duplicate pair to keep, whether to run it via a
+new tool, whether to hold until Task 4 is committed and can re-verify
+after cleanup) is explicitly Antonio's call, per instruction.

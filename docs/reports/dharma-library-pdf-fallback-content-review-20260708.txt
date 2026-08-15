@@ -1,0 +1,694 @@
+DHARMA-LIBRARY-PDF-FALLBACK — FULL CONTENT REVIEW
+Prepared for Antonio, 2026-07-08. Output and analysis only — nothing modified,
+reverted, or fixed. No file in this skill was touched to produce this report.
+
+Source directory (all four files read directly, live, right now):
+~/.hermes/skills/multimodal-analysis-and-dharma-synthesis/dharma-library-pdf-fallback/
+
+================================================================================
+1. FULL CONTENT — ALL FOUR FILES, VERBATIM, AS THEY STAND RIGHT NOW
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: SKILL.md
+--------------------------------------------------------------------------------
+---
+name: dharma-library-pdf-fallback
+description: Fallback method for retrieving passages from the Dzogchen/Madhyamaka library when semantic search fails to surface a known book. Use when the user asks for a passage from a specific title and library-search returns irrelevant chunks.
+tags: [buddhism, library, pdf, dzogchen, madhyamaka, avidya]
+---
+
+# Dharma Library PDF Fallback
+
+## When to use
+- **Always** — `library-search --json` returns only metadata (title, author, chunk_index, score), never the actual chunk text. The PDF fallback is the only way to read actual content.
+- Use `library-search` first to identify *which* files and *approximately where* (chunk_index as a rough position signal) relevant material lives, then use this fallback to read it.
+- Also applies when: semantic search scores are low, results are off-topic, or a specific book was requested but not surfaced.
+
+## Reference files
+- `references/library-inventory.md` — full book list with authors, subcategory assignments, and known misfiled texts (93 PDFs as of June 2026). Load this before running a filesystem scan.
+- `references/library-infrastructure.md` — storage architecture (Qdrant vs .json sidecars), stderr suppression tip for library-search, cold-start notes, and known subcategory mismatches.
+- `references/qdrant-audit-june-2026.md` — full audit results: 649 unique sources, subcategory counts, confirmed mismatches, working scroll script.
+- `references/missing-pdfs-inventory.md` — confirmed list of texts indexed in Qdrant but absent from the filesystem (Repetti, Rahula, Capriles, Feltz, others). Online retrieval notes — what was tried, what failed, why Routledge volumes won't be found online. Load before spending time on retrieval attempts.
+- `references/free-will-knowledge-bank.md` — full cross-tradition synthesis on free will and agency (cetanā/Abhidharma → Nāgārjuna agent/action → Tsongkhapa conventional agency → Yogācāra ālaya → Dzogchen beyond cause/result), with exact PDF line numbers from the July 2026 session. Load when the topic is free will, karma/volition, agency, the agent-self, or intentional action across traditions.
+
+## Step 1 — Confirm the file exists
+
+```bash
+find /opt/agents/library/buddhism -iname "*<keyword>*" 2>/dev/null
+```
+
+This will show both the indexed `.pdf` and `.json` in the library root, plus the Calibre copy under `/opt/agents/library/buddhism/calibre/`.
+
+## Step 2 — Convert PDF to text
+
+```bash
+pdftotext "/opt/agents/library/buddhism/<subcategory>/<Filename>.pdf" /tmp/output.txt && echo "done"
+```
+
+Prefer the indexed copy (not Calibre) — it's already in the subcategory folder and was the one indexed.
+
+## Step 3 — Read strategically
+
+Use `read_file` with offset and limit to sample the text. The file will have thousands of lines.
+
+- Lines 1–100: front matter, table of contents
+- Lines 200–400: preface, intro
+- Lines 1000+: core doctrinal content begins
+- Scan in 80-line windows, moving forward until you find relevant material
+
+```python
+read_file(path="/tmp/output.txt", offset=1800, limit=80)
+```
+
+## Step 4 — Cite correctly
+
+Once you find the passage, synthesize in your own voice and cite naturally:
+"según Gueshe Tashi Tsering en El Gran Vacío..."
+
+Do NOT quote verbatim unless the passage is short and the user explicitly asks for the exact words.
+
+## Antonio's citation preferences — STRICT
+
+- NEVER announce that you searched the library, consulted a PDF, or ran a tool. Deliver the result directly.
+- NEVER use internal acronyms (e.g. "TGM3") without writing the full title first. Prefer writing the full title always.
+- NEVER narrate your process: no "encontré en la biblioteca", "según mi búsqueda", "el chunk indica", or any equivalent.
+- If a citation is warranted, embed it naturally in prose: "como señala Khenchen Namdrol en el Treasury of Genuine Meaning..." — then continue. Do not make the citation the subject of a sentence.
+
+## Step 2b — Grep first, then read
+
+After converting to text, use grep to locate relevant line numbers before reading:
+
+```bash
+grep -n -i "keyword1\|keyword2\|keyword3" /tmp/output.txt | head -40
+```
+
+Then use `read_file` with `offset` centered on the hit lines. This is faster than blind windowing.
+
+## Longchenpa corpus — author name split in Calibre
+
+The Calibre library splits Longchenpa's works across TWO author folders. A scan for one misses the other:
+
+- `/opt/agents/library/buddhism/calibre/Longchen Rabjam/` — Seven Treasuries and Treasury of Genuine Meaning series (most doctrinally dense)
+- `/opt/agents/library/buddhism/calibre/Longchenpa/` — Trilogy of Rest (Finding Rest in the Nature of the Mind, Finding Rest in Meditation, Finding Rest in Illusion)
+
+Always search both when the topic is Longchenpa. Use:
+```bash
+find /opt/agents/library/buddhism -iname '*longchen*' 2>/dev/null | sort
+```
+
+For Rigpa specifically: most productive files are `The Precious Treasury of the Basic Space of Phenomena`, `The Precious Treasury of Pith Instructions`, and `Finding Rest in the Nature of the Mind, Vol. 1`. See `references/longchenpa-rigpa.md` for a pre-extracted knowledge bank.
+
+## Multi-file triangulation
+
+When `library-search` surfaces 3–5 candidate files for a complex doctrinal question:
+
+1. Convert all candidates with `pdftotext` (fast, ~1–2s each)
+2. Run `grep -n` with relevant keywords across all converted files before reading any
+3. Identify which file has the densest, most specific hits — read that one first
+4. Use `read_file` only on the 2–3 most promising line ranges per file
+5. Stop when you have enough for a well-grounded synthesis — you don't need to exhaust every file
+
+This is faster than converting one file, reading it fully, then moving to the next.
+
+## Longchenpa file inventory
+
+A confirmed list of all Longchenpa PDFs in the library, with key passage locations and working grep keywords, is available at:
+`references/longchenpa-file-inventory.md`
+
+Load this before running a filesystem scan for Longchenpa texts — it saves a full `find` round-trip and gives you known-good line numbers for Rigpa passages.
+
+## Thögal practice mechanics — Treasury of Genuine Meaning V3 (TGM3)
+
+The richest library source for Thögal *practice* mechanics (four visions, four luminosities, postures, light sources) is **TGM3** — `Treasury_of_Genuine_Meaning_-_V3.pdf`, commentary by Khenchen Namdrol Rinpoche on Longchenpa.
+
+Key passage locations (after `pdftotext` conversion):
+- Lines 720–740: three analogies for wisdom abiding — kāya in a vase, candle in a vase, sun and sun's rays
+- Lines 920–940: four luminosities as the *only* basis of Thögal practice; palace of the eyes
+- Lines 1440–1520: butter lamp / candle in a vase as analogy for obscured inner radiance (NOT as practice object); Vimalamitra citation
+- Lines 498–510: rigpa tsed peb (third vision); kāyas become visible through tögal
+- Lines 3810–3870: practitioner seeing clear-light appearances through force of tögal practice
+
+**Critical distinction for Thögal light sources:** The candle/butter lamp appears in TGM3 consistently as *analogy* — describing how the body occludes inner radiance the way a jar contains a flame. The actual practice supports named in the texts are: solar rays (morning/afternoon), moonlight, and total darkness. TGM3 line 3814 (Ladrub Thiglé Gyachen): "in the morning and afternoon gaze at the sun's rays and focus on the spontaneously present visions of the vajra-chains."
+
+See `references/thogal-light-sources.md` for full extracted passages and doctrinal notes.
+
+## Thögal four visions — TGM3 knowledge bank
+
+A pre-extracted knowledge bank covering the full four-visions sequence (direct realization of dharmatā → increasing experience → rigpa reaching its full extent → exhaustion of phenomena), vajra chain mechanics, bindu maturation stages, and the bardo parallel is available at:
+`references/thogal-four-visions.md`
+
+Key line numbers: first vision 3868–3870, 8082–8086; second vision 8092–8119; third vision 498–505, 625–628, 8120–8124; fourth vision 643–650, 6018–6034; vajra chain 1003–1055; four luminosities as only basis 924–927.
+
+**Achard "Four Visions of Thogel" location:** This text by Jean-Luc Achard is NOT in the active library subcategory folders — it exists only in backup directories (`/opt/agents/library/buddhism/backup/2026-06-21/Jean-Luc Achard/...`). Use TGM3 as primary source for four visions doctrine.
+
+## Emptiness vol. 5 passage locations (Geshe Tashi Tsering)
+
+Pre-extracted line numbers for key doctrinal sections:
+`references/emptiness-vol5-passage-locations.md`
+
+Covers: Tsongkhapa's three levels of selfhood (lines 1374–1620), acquired vs. innate self-grasping (1387–1420), direct perception comparison across schools (2045–2165). Load before converting the PDF when the question is about selfhood, the three notions of self, or intrinsic existence.
+
+## Citation style — CRITICAL
+
+NEVER use acronyms or shorthands in user-facing responses (e.g. "TGM3", "TGM", "V3"). Always write the full title naturally in prose: "Khenchen Namdrol's commentary in the Treasury of Genuine Meaning, Volume 3". Antonio corrected this explicitly — it reads as rude and assumes familiarity with internal labels the user never agreed to.
+
+NEVER announce where you found the information. Do not say "según TGM3", "encontré en la biblioteca", "the library returned", or any variation. Synthesize and deliver — source announcement is noise, not scholarship.
+
+If a citation is warranted, embed it naturally: "según Khenchen Namdrol en el Treasury of Genuine Meaning..." — not as a footnote about your retrieval process.
+
+## Qdrant collection — live state (June 2026)
+
+The `buddhism` collection has grown well beyond the original 93-PDF inventory:
+- **1,126,601 points** (chunks) as of late June 2026
+- **649 unique sources** confirmed in a 300k-point sample
+- The collection is still growing — new texts are being added
+
+**Subcategory distribution (sample):**
+dzogchen: 265 | general: 161 | madhyamaka: 49 | theravada: 48 | mahayana: 37 | vajrayana: 27 | mahamudra: 27 | zen: 11 | yogacara: 9 | tibetan: 8 | tantra: 2 | bon-dzogchen: 2
+
+**Non-standard subcategories now present:** `general`, `tibetan`, `history`, `zen` — these were not in the original schema. Newer additions are not constrained to the original controlled vocabulary. When searching, omit `--subcategory` more often than not.
+
+## Texts that exist ONLY in backup directories (no accessible PDF)
+
+These texts appear in `library-search` results (Qdrant vectors exist, scores can be high) but have no PDF in the main library or subcategory folders — only `cover.jpg` in backup dirs. Do NOT attempt `pdftotext` on backup paths; they lack the actual PDF. Pivot immediately to accessible alternatives:
+
+- **Rick Repetti — *Buddhist Perspectives on Free Will: Agentless Agency?*** — scores ~0.78 on free-will queries; backup only. Pivot to: Nāgārjuna MMK Ch. VIII (madhyamaka/), Geshe Tashi Tsering *Buddhist Psychology* (mahayana/), Longchenpa *Precious Treasury of Philosophical Systems* (dzogchen/).
+- **Walpola Rahula — *What the Buddha Taught*** — backup only. Pivot to: Four Noble Truths vol. 1 (mahayana/).
+- **Bernard Feltz — *Free Will, Causality, and Neuroscience*** — backup only.
+- **Jean-Luc Achard — *Four Visions of Thogel*** — backup only (see Thögal section above for TGM3 alternatives).
+
+Diagnostic: if `find /opt/agents/library/buddhism -iname '*<title>*'` returns only paths under `backup/` and the dir contains only `cover.jpg`, the PDF is missing — don't try to extract it.
+
+**Pre-built knowledge bank:** For free will and agency across traditions, see `references/free-will-knowledge-bank.md` — a full synthesis built from the July 2026 session with exact PDF line numbers (cetanā/Abhidharma → Nāgārjuna agent/action → Tsongkhapa conventional agency → Yogācāra ālaya → Dzogchen beyond cause/result). Also notes Repetti's *agentless agency* compatibilist position (not yet verifiable from library — PDF missing).
+
+**Online retrieval for missing PDFs:** Do not spend more than 2–3 attempts retrieving Routledge academic edited volumes online — they are never freely available. See `references/missing-pdfs-inventory.md` for confirmed dead ends (Internet Archive, Semantic Scholar, PhilPapers, Academia.edu, ResearchGate, JSTOR all blocked or paywalled as of July 2026). After 2–3 attempts, stop and ask Antonio to provide the file directly.
+
+## Known tagging mismatches (audited June 2026)
+
+See `references/qdrant-audit-june-2026.md` for the full list. Key issues:
+
+- **dzogchen** is the most polluted category: contains Yogācāra (Jeffrey Hopkins, *Absorption in No External World*), Tantra (Khenpo Namdrol on Secret Essence Tantra V3), Mahayana (Khenpo Sodargye on Shāntideva; Spanish Bodhisattvacaryāvatāra), Neo-Advaita (John Wheeler, *Awakening to the Natural State*), Madhyamaka (*El Gran Vacío*), and non-traditional modern texts (*Dissolved* by Tarun Sardana)
+- **mahamudra**: all three instances of Longchenpa's *Finding Rest in the Nature of the Mind* (Trilogy of Rest, Vol. 1) — core Dzogchen, not Mahamudra
+- **theravada**: Geshe Tashi Tsering's *Buddhist Psychology* (Gelug/Mahayana); *How to Be Sick* (self-help)
+- **general**: Pseudo-Dionysius the Areopagite's *Mystical Theology* — a Christian text in a Buddhist collection
+- **zen**: Alan Watts' *The Wisdom of Insecurity* (popular philosophy); *The Zen of Wine* (non-doctrinal)
+
+**Practical implication:** For any cross-tradition or broad doctrinal query, omit `--subcategory` entirely. Category filters will miss relevant texts and may surface irrelevant ones.
+
+## Qdrant REST API — collection inspection
+
+To check collection size:
+```
+python3 -c "import requests,json; r=requests.post('http://localhost:6333/collections/buddhism/points/count', json={'exact': True}); print(r.json())"
+```
+
+To scroll and enumerate unique sources (sample up to 300k points — full scroll of 1.1M times out at 180s):
+See `references/qdrant-audit-june-2026.md` for the working audit script.
+
+## Qdrant Pipeline Diagnosis
+When Antonio asks about the library infrastructure (chunk counts, tagging, ingestion issues), query and diagnose directly — do not defer. Load `references/qdrant-pipeline-architecture.md` for the full pipeline map, script paths, and known mismatch root causes. Key points:
+- There are TWO Calibre libraries: the controlled 44-book one and the live Calibre Web one (~728 authors). The live one is what the pipeline actually ingests.
+- Qdrant scroll times out on the full 1.1M collection — sample 200k–300k points max.
+- Root cause of subcategory mismatches: AI tagger + overly broad tag map + no ID overrides for new books.
+
+## Style rules (Antonio-specific)
+- NEVER present inferences as verified facts. If you read pipeline code and inferred a cause, say so explicitly — then offer to verify against the actual database.
+- NEVER use internal acronyms (e.g. "TGM3") in replies. Write full titles always.
+- NEVER narrate where information came from or what tool you used. Deliver results only.
+
+## Pitfalls
+
+- Full Qdrant scroll (1.1M+ points) times out at 180s — cap at 300k for source enumeration; unique sources stabilize well before that (649 found in first 300k)
+- `pdftotext` on scanned PDFs may return empty or garbled text — check the first 20 lines after conversion
+- Some PDFs use form feeds (`\f`) as page separators — these appear as blank lines in read_file output, normal behavior
+- `python3 -c "import fitz..."` commands may time out in this environment — prefer `pdftotext` via shell
+- library-search has a cold-start cost (loads 768-dim embedding model) — one call max per query, never loop it
+- `Meditation_on_Emptiness.pdf` (Jeffrey Hopkins) produces hundreds of "Invalid Font Weight" stderr warnings during pdftotext — pipe stderr to /dev/null or the actual grep results will be buried: `pdftotext file.pdf output.txt 2>/dev/null`
+- `library-search --source <pdf> --chunk <N>` flags do NOT work — they return empty output. Use pdftotext + grep instead to retrieve specific chunks from a known file.
+- For complex doctrinal questions with multiple keyword variants, cast a wide grep net in one call before windowing: `grep -n -i 'term1\|term2\|term3' /tmp/file.txt | head -60` — this is faster than running multiple greps sequentially.
+- When searching multiple PDFs for the same topic, convert all of them first (in parallel via execute_code), then grep all — avoids repeated tool round-trips.
+- Glossary/word-list sections at the end of PDFs can produce false positives for Tibetan term searches (e.g. `kun gzhi'i rnam shes` appearing only in a vocabulary list). Check surrounding context before reading a window around a hit.
+
+
+--------------------------------------------------------------------------------
+FILE: references/free-will-cross-tradition.md
+--------------------------------------------------------------------------------
+# Free Will and Agency — Cross-Tradition Synthesis
+*Built July 2026 from: Geshe Tashi Tsering Buddhist Psychology vol.3 (mahayana/), Four Noble Truths vol.1 (mahayana/), Nāgārjuna Mūlamadhyamakakārikā (madhyamaka/), Tsongkhapa Final Exposition of Wisdom (madhyamaka/), Longchenpa Precious Treasury of Philosophical Systems (dzogchen/). Key PDF line numbers given for re-extraction.*
+
+---
+
+## 1. Abhidharma / Gelug Psychology — cetanā as the hinge
+
+**Core claim:** The relevant Buddhist category is not "free will" but *cetanā* (volition/intention) — the always-present mental factor that coordinates and directs the mind toward its object. Cetanā IS the karmic action; body and speech create karma only insofar as the mental act is present.
+
+**Where intention comes from:** Karmic imprints (vāsanā) accumulated from beginningless time act as habit-patterns that color feeling and dictate the direction of intention. The decision is not random but is also not free in any absolute sense — it is the conditioned fruit of prior conditioning.
+
+**Buddhist Psychology vol.3, lines 1471–1540 (key passage):**
+> "Intention, the next always-present mental factor, is also called volition. This is the element that coordinates and directs the activity of each of the other elements within the main mind in respect to the object... intention, or volition, is a karmic action... New karma is created in every moment of consciousness because intention is always present."
+> "Where does intention come from?... From beginningless time, through our actions we have collected karmic imprints on our mindstreams, and these dictate our intentions."
+
+**Four Noble Truths vol.1, lines 870–930 (karma/volition):**
+> "Only when there has been some sort of mental action, some sort of intention or volition, does the specific chain reaction of cause and result occur... due to ignorance there is volition."
+> Lines 2800–2830: "Volitional action is a culmination of ignorance and craving, and clearly implies the involvement of some kind of will. From ignorance and craving comes karma, or volitional action."
+
+**The "freedom" available:** A trained mind has greater capacity to observe the gap between contact and habitual intention and redirect it. This is freedom *within* causality, not *from* it.
+
+---
+
+## 2. Theravāda — responsibility without a fixed self
+
+Karma presupposes moral responsibility, but the responsible entity is a continuum, not a fixed agent. The continuum is transformable through practice. The "freedom" is the margin of transformability — a more lucid mind conditions the next moment more skillfully.
+
+---
+
+## 3. Madhyamaka Prāsaṅgika — mutual dependence of agent and action
+
+**Nāgārjuna, MMK Chapter VIII (lines 1310–1415 in nagarjuna.txt):**
+
+Key argument (verses 1–13):
+- An inherently existing agent cannot perform action (already fixed; no change possible)
+- A non-existing agent cannot perform action (no cause)
+- Agent and action are mutually dependent: "Action depends upon the agent. The agent itself depends on action. One cannot see any way to establish them differently." (v.12)
+- Neither has svabhāva (inherent existence)
+
+**What remains:** A *conventionally designated* person acting within dependent origination — valid at the conventional level, empty of inherent existence at the ultimate level.
+
+**Tsongkhapa, Final Exposition of Wisdom, lines 3960–3985:**
+> "even though [phenomena] do not inherently exist, it is permissible to posit agents, activities, and objects — bondage and liberation, cause and effect, object comprehended and comprehender, and so forth — with respect to them."
+
+Lines 2955–2985 (actions not wasted): If the self were inherently established, actions done by one continuum-moment could not be experienced by a later moment — Nāgārjuna's refutation of an inherent self preserves karmic continuity.
+
+**Summary position:** Free will is a *conventionally valid* designation. Neither determinism (no fixed agent) nor libertarianism (no uncaused cause). The question itself presupposes a kind of selfhood that doesn't withstand analysis.
+
+---
+
+## 4. Yogācāra / Chittamātra — agent as reflexive consciousness
+
+**Longchenpa, Precious Treasury of Philosophical Systems, lines 3395–3415:**
+> "Chittamatrins hold that the agent of experience is simply a state of reflexive consciousness that is naturally lucid, without the duality of objects and the subjective agent perceiving those objects."
+
+The ālayavijñāna (basis-consciousness) stores karmic seeds; the sense of "I who choose" (manas/kliṣṭamanas) is the afflictive distortion of this reflexive awareness. What seems like a free center of choice is the misapprehension of a naturally luminous but duality-structured process.
+
+**Vatsiputrīya view (refuted by Longchenpa, lines 2830–2870):** The self is neither eternal nor impermanent, is the agent that carries karmic continuity. Longchenpa shows this is internally inconsistent: if not eternal and not impermanent, what is it?
+
+---
+
+## 5. Dzogchen — beyond the frame of cause and result
+
+**Longchenpa, Precious Treasury of Philosophical Systems, lines 11325–11345:**
+> "Natural great perfection, the essence of utterly lucid basic space, is naturally occurring timeless awareness. Since it involves neither cause nor result, neither something to develop nor an agent to develop it..."
+
+Lines 11870–11895 (White Expanse):
+> "Because conditioned sensory appearances are naturally free, they are effortlessly devoid of any cause; in the way that they abide, they cannot be established to be anything at all."
+
+Lines 13330–13365:
+> "The skillful means by which one rests imperturbably and effortlessly in awareness is trekcho, timeless freedom... Through familiarization with these, one abides in the certainty of this freedom, which is timelessly the case but simply becomes evident at this point."
+
+**The radical claim:** The question of free will belongs to the register of a mind that has not recognized Rigpa. Within recognition, there is no agent that needs to be free, and no causality that traps it. The "effortlessness" of Dzogchen is not freedom from causality but the dissolution of the knower-who-could-be-determined. Appearances are "naturally free" not because they lack causes, but because in recognition their nature does not generate the grip that makes freedom/determination a live question.
+
+**Crucial nuance (Longchenpa, lines 255–265):** This view is soteriologically dangerous without prior training. Treating effortlessness as license ("emptiness without karma") leads to downfall. The realization that renders causality irrelevant is itself causally produced by the path.
+
+---
+
+## Cross-tradition tension (not resolved)
+
+All schools affirm: the path produces results; practice matters; the practitioner's choices have consequences. But:
+
+| Tradition | Who practices? | With what freedom? |
+|-----------|---------------|-------------------|
+| Abhidharma | Conditioned continuum with trainable margin | Freedom within causality |
+| Prāsaṅgika | Conventionally designated person | Valid convention, empty of svabhāva |
+| Yogācāra | Ālaya-stream transforming its own seeds | No independent agent; transformation is structural |
+| Dzogchen | Recognition dissolves the question | Timeless freedom; the path is for arriving at the non-problem |
+
+**The irreducible paradox:** Free will as philosophical question lives in the register where there is still a "self" that could be free or unfree. Buddhist traditions don't answer whether that self is free — they methodically dissolve the coherence of the self that poses the question.
+
+---
+
+## Key PDF sources and verified line numbers
+
+| File | Key lines | Topic |
+|------|-----------|-------|
+| `mahayana/Buddhist_Psychology_vol3.pdf` | 1471–1540 | cetanā/intention full definition |
+| `mahayana/The_Four_Noble_Truths_vol1.pdf` | 870–930, 2800–2830 | karma/volition; volitional action |
+| `madhyamaka/The_Fundamental_Wisdom_of_the_Middle_Way.pdf` | 1310–1415 | Ch. VIII: agent and action |
+| `madhyamaka/Tsong-Kha-Pas_Final_Exposition_of_Wisdom.pdf` | 2955–2985, 3960–3985 | conventional agency; actions not wasted |
+| `dzogchen/The_Precious_Treasury_of_Philosophical_Systems.pdf` | 2830–2870, 3395–3415, 11325–11345, 11870–11895, 13330–13365 | Vatsiputrīya; Chittamātra agent; Dzogchen beyond cause |
+
+
+--------------------------------------------------------------------------------
+FILE: references/missing-pdfs-inventory.md
+--------------------------------------------------------------------------------
+# Missing PDFs — Texts Indexed in Qdrant Without Source Files
+
+Last verified: July 2026
+
+These texts appear in Qdrant (library-search returns metadata and scores) but have **no PDF anywhere on the filesystem**. The backup directories contain only `cover.jpg`. Do not attempt pdftotext on these — fall back to online search or ask Antonio to provide the file.
+
+## Confirmed missing
+
+| Author | Title | Qdrant subcategory | Notes |
+|--------|-------|-------------------|-------|
+| Rick Repetti | Buddhist Perspectives on Free Will: Agentless Agency? | general | Routledge edited volume, 2017. Not on Internet Archive, not open access. |
+| Walpola Rahula | What the Buddha Taught | theravada | Classic Theravada text. Not in active library folders. |
+| Elias Capriles | The Beyond Mind Papers Vol. 1–3 | general | Multiple volumes missing. |
+| Elias Capriles | Buddhism and Dzogchen Vol. I | general | Missing. |
+| Bernard Feltz | Free Will, Causality, and Neuroscience | general | Missing. |
+
+## Symptom pattern
+
+When library-search returns a text with good scores (>0.75) but `(no text)` in the chunk, the PDF is absent. Confirmed via:
+```
+find /opt/agents/library/buddhism -not -path '*/backup/*' -name '*.pdf'
+```
+The active subcategory folders (dzogchen, madhyamaka, mahayana, etc.) only contain the original ~93 manually indexed texts. Everything added later via the Calibre pipeline may exist only as Qdrant vectors without recoverable text.
+
+## Online retrieval notes (July 2026)
+
+Routledge academic edited volumes (e.g. Repetti) are **never freely available** as PDFs. Confirmed dead ends:
+- Internet Archive: 0 results
+- Semantic Scholar API: rate-limited (429) during most sessions
+- PhilPapers / PhilArchive: Cloudflare bot detection blocks headless browser
+- Academia.edu / ResearchGate: Cloudflare bot detection
+- JSTOR: CAPTCHA / access check
+
+**What sometimes works for individual journal articles** by the same author:
+- Direct author page at their university (Repetti is at Kingsborough Community College, CUNY)
+- arXiv (rare for Buddhist philosophy)
+- Unpaywall via DOI lookup
+
+**Recommended action when a PDF is missing:** Tell Antonio directly and ask him to provide the file. Do not spend more than 2–3 attempts on online retrieval for Routledge monographs.
+
+
+--------------------------------------------------------------------------------
+FILE: references/free-will-knowledge-bank.md
+--------------------------------------------------------------------------------
+# Free Will — Multi-Tradition Buddhist Knowledge Bank
+
+Synthesized July 2026 from: Buddhist Psychology vol. 3 (Geshe Tashi Tsering), The Four Noble Truths vol. 1 (Geshe Tashi Tsering), Mūlamadhyamakakārikā (Nāgārjuna, Jay Garfield translation), Precious Treasury of Philosophical Systems (Longchenpa), Tsong-kha-pa's Final Exposition of Wisdom.
+
+---
+
+## 1. Abhidharma / Pāli baseline: cetanā
+
+**Key claim:** Karma is not action per se but *volition* (cetanā). Every moment of consciousness contains intention; intention is the karmic act. The body and speech create karma only as perceived by the mental act.
+
+**Source passages (Buddhist Psychology vol. 3, pdftotext lines 1471–1540):**
+- "Intention, the next always-present mental factor, is also called volition. This is the element that coordinates and directs the activity of each of the other elements within the main mind."
+- "intention, or volition, is a karmic action... New karma is created in every moment of consciousness because intention is always present."
+- "Where does intention come from? ...From beginningless time, through our actions we have collected karmic imprints on our mindstreams, and these dictate our intentions."
+
+**Implication for free will:** Volition is real and causally efficacious, but it is *determined* by prior karmic imprints. No uncaused free choice. The space for practice is the transformability of the habit-stream — not freedom *from* causes but a different kind of cause (attention, meditation) that can reshape future intentions.
+
+**Four Noble Truths vol. 1 (lines 920–926):** "due to ignorance there is volition" — volitional action is a culmination of ignorance and craving. Clearly implies the involvement of some kind of will, but will that is conditioned.
+
+---
+
+## 2. Madhyamaka: the agent has no inherent existence
+
+**Key claim:** Neither the agent nor the action exists inherently. They are mutually dependent designations. The self-as-chooser is a conventional imputation with no ontological foundation.
+
+**Nāgārjuna, Mūlamadhyamakakārikā Ch. VIII (lines 1310–1415 of pdftotext):**
+- "This existent agent does not perform an existent action. Nor does some nonexistent agent perform some nonexistent action."
+- "Action depends upon the agent. The agent itself depends on action. One cannot see any way to establish them differently."
+- Conclusion: agent and action arise in mutual dependence — neither is primary, neither has intrinsic existence.
+
+**Tsongkhapa, Final Exposition of Wisdom (lines 3960–3980):**
+- "even though [phenomena] do not inherently exist, it is permissible to posit agents, activities, and objects — bondage and liberation, cause and effect, object comprehended and comprehender."
+- The conventional agent is valid *as a designation*. Karma, moral responsibility, and the path all function at this level.
+- If the self were inherently established, earlier and later moments could not form a single continuum → actions would be wasted or misassigned across persons. The *lack* of inherent existence is what makes karma coherent across lives.
+
+**Philosophical position:** Neither libertarian free will (no uncaused agent) nor hard determinism (conventional agency functions). The Prāsaṅgika position is closest to *compatibilism* — agency is conventionally real, metaphysically empty.
+
+---
+
+## 3. Yogācāra: ālaya-vijñāna and the illusory center of choice
+
+**Key claim:** The apparent subject who "chooses" is a refraction of reflexive consciousness. The ālaya-vijñāna (basis-consciousness) stores karmic seeds and generates the illusion of a unified choosing self.
+
+**Longchenpa on Chittamātra (Precious Treasury of Philosophical Systems, lines 3395–3415):**
+- "Chittamatrins hold that the agent of experience is simply a state of reflexive consciousness that is naturally lucid, without the duality of objects and the subjective agent perceiving those objects."
+- The sense of "I choose" arises from the afflictive aspect of consciousness — investigation generating attraction, aversion, or indifference.
+
+**Philosophical position:** The felt experience of free will is a constructed appearance of consciousness. Practice transforms the seeds in the ālaya; there is no transcendent chooser.
+
+---
+
+## 4. Dzogchen: beyond cause and result — the frame itself dissolves
+
+**Key claim:** The question of free will presupposes a subject operating within cause and effect. From the Dzogchen perspective, this frame is itself the confusion.
+
+**Longchenpa, Precious Treasury of Philosophical Systems (lines 11325–11345, 11870–11890):**
+- "Natural great perfection, the essence of utterly lucid basic space, is naturally occurring timeless awareness. Since it involves neither cause nor result, neither something to develop nor an agent to develop it..."
+- "Because conditioned sensory appearances are naturally free, they are effortlessly devoid of any cause."
+- Awakened mind is "beyond cause and result" — this is presented as the specific superiority of Atiyoga over Anuyoga.
+- Trekchö: "timeless freedom... the skillful means by which one rests imperturbably and effortlessly in awareness."
+
+**Philosophical position:** The practitioner does not "choose" to liberate thoughts — liberation is the intrinsic nature of thoughts when their ground (Rigpa) is recognized. The question of free will belongs to the mind that has not yet recognized its own nature.
+
+---
+
+## 5. Structural tension (not resolved)
+
+All schools affirm that practice produces results — the path matters. But the question of *who practices* and *with what freedom* gets different answers:
+- Abhidharma: a trainable mind within conditioned streams
+- Prāsaṅgika: a conventional designation that is sufficient for the path
+- Yogācāra: transforming the seeds of the ālaya
+- Dzogchen: recognition that there was never a practitioner who needed liberation — yet the path is still necessary to arrive at that recognition
+
+The paradox is deliberate: free will as a philosophical question lives at the level where there is still a "self" that might or might not be free. The traditions don't answer whether that self is free; they dissolve the consistency of the self that asks the question.
+
+---
+
+## Repetti — not yet read (PDF missing)
+
+Rick Repetti's *Buddhist Perspectives on Free Will: Agentless Agency?* (Routledge, 2017) is indexed in Qdrant but the PDF is absent from the filesystem. His position (from title and known secondary literature) defends a form of Buddhist *compatibilism*: meditation practice develops a kind of agency — "agentless agency" — that is neither the reified self the Abhidharma rejects nor mere mechanical determinism. He argues that the meditating practitioner exercises a real, causally efficacious form of intentional control compatible with no-self. This cannot be cited as a library source until the PDF is provided.
+
+================================================================================
+2. FACT-CHECK — EVERY VERIFIABLE FACTUAL/OPERATIONAL CLAIM
+================================================================================
+
+Method: every claim below was checked directly against either the real
+library-search source code, a live library-search invocation against the
+real buddhism_v2 Qdrant collection, or the real filesystem — not inferred
+from the documents' own internal cross-references.
+
+--------------------------------------------------------------------------------
+CLAIM A — FALSE. The single most consequential claim in the whole skill.
+--------------------------------------------------------------------------------
+Location: SKILL.md, "When to use" section, line 10 (the VERY FIRST substantive
+line of the skill — this is the entry-point instruction every session sees).
+
+Quote: "**Always** — `library-search --json` returns only metadata (title,
+author, chunk_index, score), never the actual chunk text. The PDF fallback
+is the only way to read actual content."
+
+Verified false. `library-search --category buddhism_v2 --query "..." --json
+--show-text` returns real, substantive chunk text directly from Qdrant, no
+PDF or pdftotext involved. Reproduced live just now against Repetti's own
+book specifically:
+
+  score=0.657 has_text=True preview='agentless agency. Whether Repetti's...'
+  score=0.655 has_text=True preview='free will, perhaps this is...'
+  score=0.649 has_text=True preview='of morality. Rather, I simply caution...'
+
+This claim doesn't even mention `--show-text` exists. It states as an
+unconditional "Always" rule that chunk text is NEVER retrievable via
+library-search, full stop — the strongest and most sweeping version of the
+underlying wrong belief in the entire skill, and it's the first thing a
+session reads.
+
+--------------------------------------------------------------------------------
+CLAIM B — FALSE. The originally-known wrong claim.
+--------------------------------------------------------------------------------
+Location: references/missing-pdfs-inventory.md, "Symptom pattern" section,
+line 19.
+
+Quote: "When library-search returns a text with good scores (>0.75) but
+`(no text)` in the chunk, the PDF is absent."
+
+Verified false (previously established, re-confirmed here). `(no text)`
+appears whenever `--show-text` is omitted from the query, regardless of
+whether the underlying PDF file exists on disk. Reproduced directly earlier
+in this incident's investigation: the exact same 5 Repetti/free-will chunks
+show `(no text)` without the flag and full real text with it.
+
+The "Confirmed via" line right after this claim shows a `find ... -name
+'*.pdf'` command — but that command only lists which PDF files exist. It
+does not and cannot verify the actual causal claim being made (that
+`(no text)` correlates with PDF absence) — running that find command proves
+nothing about why a specific chunk showed `(no text)`. The verification
+step doesn't verify the thing it's attached to.
+
+--------------------------------------------------------------------------------
+CLAIM C — MISLEADING / ACTIONABLY WRONG (built on a true premise).
+--------------------------------------------------------------------------------
+Location: references/free-will-knowledge-bank.md, final section "Repetti —
+not yet read (PDF missing)", and echoed in SKILL.md lines 169 and 171.
+
+Quote (free-will-knowledge-bank.md): "Rick Repetti's *Buddhist Perspectives
+on Free Will: Agentless Agency?* ... is indexed in Qdrant but the PDF is
+absent from the filesystem. ... This cannot be cited as a library source
+until the PDF is provided."
+
+The underlying fact — the PDF file is genuinely absent from the active
+library — IS true, confirmed directly: `find /opt/agents/library/buddhism
+-iname "*repetti*"` returns only dated `backup/` folders, each containing
+just a cover-image subfolder, no `.pdf` anywhere. So Task 1's earlier
+finding (PDF genuinely missing) holds for this specific book.
+
+But the conclusion drawn from that true fact — "cannot be cited... until
+the PDF is provided" — is wrong right now, demonstrated live above: the
+Qdrant chunk text for Repetti's own book, discussing his own
+"agentless agency" position, IS retrievable in full via `--show-text`,
+no PDF needed. The document treats "PDF missing" and "content
+unavailable" as the same fact. They are not the same fact, and this file's
+own closing conclusion is the sharpest instance of that conflation — it
+tells a future session this specific, directly-relevant source is
+unusable, when it is usable right now.
+
+--------------------------------------------------------------------------------
+CLAIM D — FALSE description of a real limitation.
+--------------------------------------------------------------------------------
+Location: SKILL.md, "Pitfalls" section, second-to-last bullet.
+
+Quote: "`library-search --source <pdf> --chunk <N>` flags do NOT work —
+they return empty output. Use pdftotext + grep instead to retrieve specific
+chunks from a known file."
+
+Verified false as stated. Checked the real script's argument parser
+directly (`/opt/agents/shared/bin/library-search`) — there is no `--source`
+and no `--chunk` flag defined anywhere in it. The actual flags are
+`--category`, `--query`, `--subcategory`, `--tags`, `--estado`,
+`--language`, `--top`, `--show-text`, `--json`. Invoking `--source`/`--chunk`
+would fail with an argparse "unrecognized arguments" error, not "return
+empty output" — those are different failure modes, and only one of them
+is real. The practical takeaway ("don't rely on these flags") is
+harmless, but the claim misdescribes what actually happens if you try.
+
+--------------------------------------------------------------------------------
+Spot-checked TRUE claims (confirmed directly, not taken on the document's word)
+--------------------------------------------------------------------------------
+- Repetti's PDF file is genuinely absent from the active library (only
+  dated `backup/` folders with cover art, no `.pdf`) — TRUE, confirmed by
+  direct filesystem check.
+- `library-search`'s real flags are exactly: `--category`, `--query`,
+  `--subcategory`, `--tags`, `--estado`, `--language`, `--top`,
+  `--show-text`, `--json` — confirmed by reading the script's argparse
+  directly.
+
+Not independently re-verified in this pass (flagging honestly rather than
+implying full verification): the specific Qdrant point count (1,126,601),
+the 649-unique-sources figure, the exact subcategory distribution numbers,
+the 180-second scroll-timeout figure, and the tagging-mismatch examples
+(dzogchen/mahamudra/theravada/general/zen misfilings) — these are
+plausible and consistent with the separately-produced incident report from
+earlier in the investigation, but re-confirming each one would require a
+fresh Qdrant scroll/count pass not done as part of this specific review.
+
+================================================================================
+3. DOES THE BAD CLAIM (OR A PARAPHRASE OF IT) APPEAR MORE THAN ONCE?
+================================================================================
+
+YES — in 3 of the 4 files, and the files actively cross-reference each
+other while repeating it, which is the "worse than appearing once" pattern
+flagged in the task:
+
+1. SKILL.md — the broadest, most unconditional version (Claim A: "Always...
+   never the actual chunk text"), stated as the very first instruction in
+   the file.
+2. SKILL.md, "Texts that exist ONLY in backup directories" section —
+   restates the same wrong diagnostic for four specific books (Repetti,
+   Rahula, Feltz, Achard) and explicitly points to
+   `references/missing-pdfs-inventory.md` ("See references/
+   missing-pdfs-inventory.md for confirmed dead ends") and
+   `references/free-will-knowledge-bank.md` right in the same paragraph —
+   actively directing a future session to the other two files that repeat
+   the same claim.
+3. references/missing-pdfs-inventory.md — the original, narrower version
+   (Claim B, the already-known one), with its own "Confirmed via" line
+   that doesn't actually confirm it.
+4. references/free-will-knowledge-bank.md — repeats the conclusion in its
+   own voice (Claim C) as the file's closing statement, specifically about
+   Repetti, the exact book demonstrated retrievable above.
+
+The only one of the four files that does NOT repeat any version of this
+claim is references/free-will-cross-tradition.md — that file is pure
+doctrinal synthesis with page/line citations to books that ARE present on
+the active filesystem (Buddhist Psychology, Four Noble Truths, MMK,
+Tsongkhapa, Longchenpa's Precious Treasury) and contains no
+retrieval-infrastructure claims at all. It is clean on this specific
+question.
+
+So: this is not "a bad idea that appears once." It is a single wrong
+diagnostic that was written once, generalized to an unconditional rule at
+the top of the skill's entry point, and then cross-referenced from two
+separate reference files that a future session would be actively pointed
+toward — meaning correcting only the originally-flagged instance
+(missing-pdfs-inventory.md) would leave the more consequential, more
+unconditional version (SKILL.md's own opening instruction) fully intact.
+
+================================================================================
+4. VERSION CONTROL STATUS
+================================================================================
+
+None of this content is under git, anywhere, at any level.
+
+Checked directly:
+  cd ~/.hermes/skills && git rev-parse --is-inside-work-tree
+    -> fatal: not a git repository (or any of the parent directories): .git
+
+  find ~/.hermes/skills -maxdepth 2 -iname ".git"   -> no results
+  find ~/.hermes        -maxdepth 1 -iname ".git"   -> no results
+
+  cd .../dharma-library-pdf-fallback && git status
+    -> fatal: not a git repository (or any of the parent directories): .git
+
+The entire `~/.hermes/skills/` tree — this skill and every other skill on
+this system — exists purely as live filesystem state. The only historical
+record of prior states is the weekly `.curator_backups/*/skills.tar.gz`
+snapshots (5 exist, roughly weekly, most recent 2026-07-07T18-40-48Z,
+already used earlier in this incident's investigation as the pre-write
+baseline). Those snapshots are backups, not version control: no commit
+history, no diffs, no authorship, no messages explaining why a change was
+made, and — critically — no gate stopping a bad write from landing between
+snapshots, which is exactly what happened the night of this incident.
+
+This is a real, direct gap relative to two principles in the hermes-agent
+manifesto committed earlier today:
+
+- **Principle 6, The commit contract** ("code that is live in production
+  and code that is committed to version control are supposed to be the
+  same code") — for skills, there is no committed version at all to be the
+  same as. The gap this principle worries about (live and committed
+  diverging) is actually narrower than the real situation here: there's
+  nothing to diverge FROM.
+- **Principle 1, State is the system** ("a turn that happened only in
+  memory and never reached the database did not happen, as far as the
+  system is concerned") — the same logic applies to the agent's own
+  operating instructions: a bad edit to SKILL.md that happened only on
+  disk, with no git history, is indistinguishable after the fact from the
+  file having always read that way, unless someone happens to still have
+  last week's tarball and thinks to diff against it. This incident's own
+  investigation only worked because the pre-run backup tarball happened to
+  exist and someone thought to extract and diff it — that's incidental,
+  not structural.
+
+Worth flagging as its own, separate finding: this is not a new problem
+created by the 2026-07-07 incident. It's a pre-existing gap that the
+incident happened to expose. Fixing the write-guard (already done,
+committed `5bb158927`) stops a bad autonomous write from landing again.
+It does nothing about the fact that a good, human-approved, foreground
+edit to a skill is *also* unversioned — same blind spot, different actor.
+
+================================================================================
+5. WHAT WAS NOT DONE
+================================================================================
+
+No file in ~/.hermes/skills/multimodal-analysis-and-dharma-synthesis/
+dharma-library-pdf-fallback/ was modified, reverted, or deleted to produce
+this report. Output and analysis only, per instruction. Fix-vs-revert
+decision held for Antonio, informed by the actual content above rather
+than a summary of it.

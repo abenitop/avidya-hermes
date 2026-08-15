@@ -1,0 +1,208 @@
+ITEMS 3 & 4 — WHATSAPP OUTBOUND FILTERING INVESTIGATION
+2026-07-08. Scoped to output filtering only, per instruction — buddhism_v2,
+migrations, and items 5/6 not touched in this pass.
+
+================================================================================
+ITEM 3 — WhatsApp outbound filter for background-review status lines
+================================================================================
+
+FINDING: the premise doesn't hold up under direct code verification. Neither
+Discord's nor LINE's mechanism is actually a leak-prevention filter. No code
+change was made for Item 3 — implementing one would defend against a problem
+that doesn't exist on WhatsApp's architecture. Full reasoning below.
+
+--- What Discord's mechanism actually does ---
+
+plugins/platforms/discord/adapter.py:66-84 defines
+_DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS, a set of regexes
+including the 💾 one. Read the comment directly above it (lines 59-64):
+
+  "Upgrade-bridge fallback only. The primary mechanism is the persisted
+  non-conversational message-ID set populated from explicitly marked sends
+  (metadata["non_conversational"]). These regexes exist solely to recognize
+  status bumps emitted by an older gateway version that pre-dates the
+  marking, so they don't partition history after an upgrade."
+
+This is not a send-time filter. It's a fallback classifier used when Discord
+rebuilds conversation context by re-scanning its own channel.history() (grep
+hits at adapter.py:4929, 4982, 6099 — "avoids a full channel.history() scan
+on hot paths", "backfill — avoids a full channel.history() scan"). Discord is
+the ONLY adapter that does this kind of platform-native history
+reconstruction — confirmed by grepping every plugins/platforms/*/adapter.py
+for "non_conversational": Discord is the only hit. The regex exists so that
+when Discord re-reads its own channel as a history source, it doesn't
+mistake a past "💾 Self-improvement review: ..." bump for a real assistant
+turn and feed it back into context as if the agent had said it conversationally.
+
+The 💾 message is still SENT to Discord, in full, every time — this
+mechanism does not suppress or redact it. It only affects how a later
+history rebuild interprets it.
+
+--- What LINE's mechanism actually does ---
+
+plugins/platforms/line/adapter.py:599-608:
+
+  "Prefixes the gateway uses for system busy-acks (interrupting / queued /
+  steered). When the postback cache has a PENDING entry we *bypass* the
+  cache for these so they reach the user as visible bubbles instead of
+  being silently swallowed."
+
+_SYSTEM_BYPASS_PREFIXES (including "💾") is the OPPOSITE of a filter — it
+GUARANTEES delivery past a LINE-specific postback-caching quirk (PR #18153).
+Nothing about it hides or redacts content from the user.
+
+--- Does WhatsApp have either underlying problem? ---
+
+Checked directly:
+- History reconstruction from platform-native messages: WhatsApp adapter has
+  zero matches for "reconstruct", "get_conversation_history",
+  "fetch_history", "backfill", "cold start", "session recovery" against its
+  own message store. It doesn't do this at all. Every platform except
+  Discord relies purely on state.db as the single source of truth.
+- Postback/message cache that could silently swallow a send: WhatsApp
+  adapter has zero matches for "cache", "dedup", "postback", "swallow" near
+  send(). Its send() (adapter.py:832) is a straight format → chunk → HTTP
+  POST to the bridge, no caching layer of any kind.
+- WhatsApp's send() accepts a `metadata` parameter but never reads it —
+  confirmed by direct inspection; the docstring even says metadata "is
+  accepted to honor the base-class contract" only.
+
+Neither Discord's problem (own-history-misreading) nor LINE's problem
+(postback-cache swallowing) exists in WhatsApp's architecture. Porting
+either mechanism would be adding code with no real caller and no real
+problem to solve — the kind of thing the manifesto's own Simplicity
+principle argues against.
+
+--- Confirmed also consumed nowhere else ---
+
+grepped "non_conversational" across the entire repo (excluding tests): every
+write site is gateway/run.py's _non_conversational_metadata (which is
+explicitly Discord-only — "Mark Discord lifecycle/status sends without
+changing other platforms", returns metadata unchanged for every other
+platform), and the only READ site is Discord's own adapter. It is Discord-only,
+end to end, by design — not a partially-centralized mechanism other
+platforms are missing out on.
+
+--- Task question 2: is the message type dead now that background_review
+    writes are hard-blocked? ---
+
+NO — not dead. agent/background_review.py:402 defines
+`notify_tools = {"memory", "skill_manage"}`. Today's earlier fix
+(is_curator_platform / the unconditional live-fork block) only touches
+skill_manage. The "memory" tool is untouched and still writable by the live
+per-turn fork. A successful memory-tool action in a background review pass
+still produces a "💾 Self-improvement review: ..." summary and still calls
+agent.background_review_callback → _bg_review_send →
+_deliver_bg_review_message → _status_adapter.send(...) on every platform,
+WhatsApp included. This is real, reachable code, not dead defense-in-depth.
+
+--- Recommendation ---
+
+No code change made. If Antonio still wants something here despite neither
+underlying problem applying to WhatsApp, the only thing that would be
+genuinely low-cost and non-inert is extending _non_conversational_metadata's
+tag to all platforms (removing the Discord-only restriction) purely so the
+property is recorded in state.db uniformly — but this has zero current
+consumer anywhere outside Discord's own adapter, so it would be inert
+forward-looking work, not a fix for anything broken today. Flagging it as an
+option, not doing it unasked.
+
+No test coverage added for Item 3 — there is no functional code change to
+cover.
+
+================================================================================
+ITEM 4 — internal narration leaking to chat (investigation only, no fix)
+================================================================================
+
+FINDING: this is a real, deliberate, named, ON-BY-DEFAULT feature —
+"interim assistant messages" — not a bug in the sense of broken code. It
+does exactly what it's built to do. The question is whether what it's built
+to do is what Antonio wants on WhatsApp specifically.
+
+--- The mechanism, traced end to end ---
+
+1. When the model generates an assistant turn that includes both narrative
+   text and a tool call, chat_completion_helpers.py:2139-2173 accumulates
+   the text (`content_parts`) regardless of whether a tool call is also
+   forming. Once a tool call starts accumulating (`tool_calls_acc`
+   non-empty), REAL-TIME character-by-character streaming display of that
+   text is suppressed (comment: "avoids displaying chatty 'I'll use the
+   tool...' text alongside tool calls") — but the text itself is not
+   discarded.
+
+2. gateway/run.py:16404 resolves `interim_assistant_messages_enabled`,
+   default `True` (hermes_cli/config.py:1761 — "show natural mid-turn
+   assistant status messages"). This is a real gateway config default, not
+   something Antonio opted into for this deployment specifically.
+
+3. gateway/run.py:17387 `_interim_assistant_cb` is wired to
+   `agent.interim_assistant_callback`. When the model's pre-tool-call text
+   is ready, this callback either queues it as a `_COMMENTARY` segment on
+   the active stream consumer (gateway/stream_consumer.py:319-322) or, with
+   no stream consumer, sends it directly:
+   `_status_adapter.send(_status_chat_id, text, metadata=_status_thread_metadata)`
+   — a real, standalone outbound chat message, not a display-only effect.
+
+4. Checked stream_consumer.py's handling of `_COMMENTARY` items
+   (line 584+) for any visual distinction (prefix, marker, formatting) that
+   would tell the user "this is in-progress commentary, not a final
+   answer" — found none. It's delivered as an ordinary message,
+   indistinguishable in format from the final answer.
+
+This exactly explains tonight's incident symptom: "The chunks are returning
+without text content — a known pipeline issue. Let me try the fallback PDF
+method..." was the model's own tentative, in-progress, and in that instance
+WRONG reasoning, broadcast to WhatsApp as a real message because that's
+precisely what the interim-assistant-messages feature is designed to do —
+give the user visibility into what the agent is doing mid-turn. It also
+directly conflicts with dharma-library-pdf-fallback/SKILL.md's own explicit,
+Antonio-authored instructions ("NEVER narrate your process... NEVER announce
+that you searched the library... Antonio corrected this explicitly") — a
+per-skill prompted preference that this gateway-level feature has no
+awareness of and can override, since it operates on whatever text the model
+generates before a tool call, independent of what any individual skill's
+prompt asked for.
+
+--- Already-available lever, no code change required ---
+
+gateway/run.py:16404-16413 resolves this setting through
+_resolve_gateway_display_bool, which supports a per-platform override via
+`display.platforms.<platform>.interim_assistant_messages` (same mechanism
+already used for the `streaming` setting elsewhere in this file — confirmed
+by reading the resolver's docstring and its Mattermost-specific
+`require_platform_override_for` usage as a precedent). Antonio could set:
+
+  display:
+    platforms:
+      whatsapp:
+        interim_assistant_messages: false
+
+in config.yaml right now, with zero code changes, to stop this specific
+class of message on WhatsApp while leaving it enabled on other platforms
+where mid-turn visibility might be wanted (e.g. a more technical/dev-facing
+channel).
+
+--- Design question for Antonio (not decided here, per instruction) ---
+
+Three different levers exist, not mutually exclusive, and it's not a pure
+bug fix because there's no broken code:
+
+1. Config-only, immediate, zero-risk: disable interim_assistant_messages
+   for the whatsapp platform specifically via the override above. Keeps the
+   feature elsewhere.
+2. Structural: keep the feature but visually distinguish commentary from
+   final answers when delivered (e.g. a prefix or different formatting) so
+   even if shown, it doesn't read as a considered final statement — would
+   need a real code change in stream_consumer.py / _interim_assistant_cb.
+3. Root-cause / prompting: instruct the model not to generate narrative
+   filler before tool calls at all (system-prompt level), so there's
+   nothing for the interim-messages feature to surface even where it's
+   enabled. This is the only option that also fixes the *content* problem
+   (the narration itself being wrong, not just where it's delivered) — the
+   dharma-library skill already tries this per-skill ("NEVER narrate your
+   process") and it isn't reliably followed, which is itself informative:
+   a prompt-only instruction competing against a token-by-token generation
+   process is not a hard guarantee the way a config gate is.
+
+No fix implemented. Holding for Antonio's decision on which lever(s) to
+pull, per the task's explicit instruction to report analysis, not a fix.
